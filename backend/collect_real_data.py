@@ -13,8 +13,9 @@ from app.db.base import Base
 
 def run():
     print("🚀 Bắt đầu thu thập DỮ LIỆU THẬT từ thị trường...")
-    DATABASE_URL = "sqlite:///./vn30.db"
-    engine = create_engine(DATABASE_URL)
+    from app.core.config import settings
+    db_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
+    engine = create_engine(db_url)
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = SessionLocal()

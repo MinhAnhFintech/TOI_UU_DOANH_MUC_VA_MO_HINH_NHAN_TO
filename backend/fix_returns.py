@@ -1,33 +1,31 @@
 import sqlite3
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from app.db.models import PriceDaily
 
-engine = create_engine('sqlite:///./vn30.db')
+from app.core.config import settings
+db_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
+engine = create_engine(db_url)
 SessionLocal = sessionmaker(bind=engine)
 session = SessionLocal()
 
-df = pd.read_sql('SELECT date, ticker, close FROM price_daily', engine)
-df['date'] = pd.to_datetime(df['date'])
-df = df.sort_values(by=['ticker', 'date'])
-
-df['ret'] = df.groupby('ticker')['close'].pct_change().fillna(0.0)
-rf_daily = (1 + 0.05)**(1/252) - 1
-df['excess_ret'] = df['ret'] - rf_daily
-
-# Convert back to dict for update
-updates = []
-for _, row in df.iterrows():
-    updates.append({
-        'date': row['date'].date(),
-        'ticker': row['ticker'],
-        'ret': row['ret'],
-        'excess_ret': row['excess_ret']
-    })
-
-print('Updating PriceDaily in database...')
-session.bulk_update_mappings(PriceDaily, updates)
-session.commit()
+print('Executing raw SQL update for instant performance...')
+sql = """
+UPDATE price_daily
+SET 
+  ret = COALESCE(sub.ret, 0.0),
+  excess_ret = COALESCE(sub.ret, 0.0) - (POWER(1.0 + 0.05, 1.0/252.0) - 1.0)
+FROM (
+  SELECT 
+    date, 
+    ticker,
+    (close - LAG(close) OVER(PARTITION BY ticker ORDER BY date)) / NULLIF(LAG(close) OVER(PARTITION BY ticker ORDER BY date), 0) as ret
+  FROM price_daily
+) sub
+WHERE price_daily.date = sub.date AND price_daily.ticker = sub.ticker;
+"""
+with engine.begin() as conn:
+    conn.execute(text(sql))
 print('Done!')
 

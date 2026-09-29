@@ -13,8 +13,9 @@ from app.db.base import Base
 
 def build_factors():
     print("🚀 Bắt đầu xây dựng nhân tố Fama-French TỪ DỮ LIỆU THẬT...")
-    DATABASE_URL = "sqlite:///./vn30.db"
-    engine = create_engine(DATABASE_URL)
+    from app.core.config import settings
+    db_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
+    engine = create_engine(db_url)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = SessionLocal()
 
@@ -137,14 +138,14 @@ def build_factors():
         
         factors.append(FactorsDaily(
             date=dt.date(),
-            mkt=mkt,
-            smb=smb,
-            hml=hml,
-            rmw=rmw,
-            cma=cma,
-            liq=liq,
-            for_factor=for_,
-            vol=vol
+            mkt=float(mkt) if pd.notna(mkt) else 0.0,
+            smb=float(smb) if pd.notna(smb) else 0.0,
+            hml=float(hml) if pd.notna(hml) else 0.0,
+            rmw=float(rmw) if pd.notna(rmw) else 0.0,
+            cma=float(cma) if pd.notna(cma) else 0.0,
+            liq=float(liq) if pd.notna(liq) else 0.0,
+            for_factor=float(for_) if pd.notna(for_) else 0.0,
+            vol=float(vol) if pd.notna(vol) else 0.0
         ))
         
     print(f" Đã tính toán xong {len(factors)} ngày nhân tố.")

@@ -114,3 +114,43 @@ Hệ thống được thiết kế dạng Dashboard (React JS + Vite) kết nố
    - Bấm **Chạy thuật toán**. Hệ thống vẽ đường Equity Curve (Tăng trưởng NAV) so sánh giữa Danh mục tối ưu, Danh mục chia đều (Equal-weight) và VN30-Index, kèm theo bảng rủi ro Max Drawdown.
 
 ---
+
+
+## 8. Hướng dẫn Chạy Thực Tế & Xử lý Lỗi (Troubleshooting)
+
+### Bước 1: Khởi tạo Database (Supabase)
+Bạn cần có một dự án trên Supabase. Copy file `.env.example` trong thư mục `backend` thành `.env` và điền chuỗi kết nối Session Mode:
+```env
+DATABASE_URL=postgresql+asyncpg://postgres:[YOUR-PASSWORD]@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres
+```
+
+### Bước 2: Thu thập Dữ liệu (Backend)
+Mở Terminal 1 (Backend), tạo và bật `.venv`, sau đó chạy:
+```powershell
+pip install -r pyproject.toml
+python -m pip install -U --extra-index-url https://vnstocks.com/api/simple "vnstock>=4.0.9" "vnai>=2.6.2"
+pip install greenlet asyncpg psycopg2-binary pandas statsmodels numpy scipy scikit-learn
+
+alembic upgrade head
+
+python collect_real_data.py
+python fix_returns.py
+python build_real_factors.py
+
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+### 🛠 Các Lỗi Thường Gặp (Khi chạy trên máy khác)
+
+1. **Lỗi `relation "price_daily" does not exist`**
+   - **Khắc phục:** Database trống, chưa chạy Migrate. Chạy lệnh `alembic upgrade head` ở thư mục `backend`.
+2. **Lỗi `ECONNREFUSED /api/v1/...` trên Terminal Frontend**
+   - **Khắc phục:** Backend chưa bật. Mở thêm 1 terminal bật `uvicorn` như hướng dẫn trên.
+3. **Lỗi `schema "np" does not exist` khi chạy `build_real_factors.py`**
+   - **Khắc phục:** psycopg2 không hiểu kiểu số thực của Numpy. Đảm bảo ép kiểu biến qua hàm `float(...)` trước khi lưu vào DB (Đã được vá trong code mới).
+4. **Lỗi treo màn hình khi chạy `fix_returns.py`**
+   - **Khắc phục:** Gửi hàng chục nghìn truy vấn `UPDATE` nhỏ lẻ qua mạng gây nghẽn. Hãy sử dụng Raw SQL Window Function để server tự tính toán siêu tốc (Đã vá).
+5. **Kết quả Hồi quy / Markowitz ra toàn số `0.00` hoặc `N/A`**
+   - **Khắc phục:** Giá thu thập về chưa được tính tỷ suất sinh lời. Chắc chắn bạn đã chạy file `python fix_returns.py`.
+6. **Đổi mô hình (CAPM/FF3/FF5) nhưng Đường biên hiệu quả không đổi**
+   - **Khắc phục:** Code cũ dùng Mean lịch sử cố định. Code mới đã được cập nhật logic lấy đúng hệ số Beta từ hồi quy OLS tương ứng của từng mô hình để dự phóng tỷ suất kỳ vọng, kết hợp bộ ước lượng Covariance động.

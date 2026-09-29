@@ -36,10 +36,80 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
                 raise ValueError("No data found for training period.")
             
             df_wide = df.pivot(index='date', columns='ticker', values='ret').fillna(0)
-            mu_daily = df_wide.mean().values
-            sigma_daily = df_wide.cov().values
-            
             rf_daily = (1 + request.rf)**(1/252) - 1
+
+            # --- COVARIANCE ---
+            from app.optimize.covariance import estimate_covariance
+            method_map = {
+                'Sample Covariance': 'sample',
+                'Ledoit-Wolf Shrinkage': 'ledoit_wolf',
+                'Semi-Covariance': 'semi'
+            }
+            method = method_map.get(request.cov_estimator, 'sample')
+            sigma_annual = estimate_covariance(df_wide, method=method, annualize=True, rf_daily=rf_daily)
+            sigma_daily = sigma_annual / 252.0
+
+            # --- EXPECTED RETURNS ---
+            from app.db.models import FactorsDaily
+            from app.models.regression import run_regression
+            from app.optimize.expected_return import estimate_expected_returns
+            
+            stmt_f = select(FactorsDaily).where(
+                FactorsDaily.date >= request.train_start,
+                FactorsDaily.date <= request.train_end
+            )
+            res_f = await session.execute(stmt_f)
+            factors = res_f.scalars().all()
+            if not factors:
+                mu_daily = df_wide.mean().values
+            else:
+                df_factors = pd.DataFrame([f.__dict__ for f in factors]).drop(columns=['_sa_instance_state'])
+                df_factors['date'] = pd.to_datetime(df_factors['date'])
+                df_factors.set_index('date', inplace=True)
+                
+                stmt_excess = select(PriceDaily.date, PriceDaily.ticker, PriceDaily.excess_ret).where(
+                    PriceDaily.date >= request.train_start,
+                    PriceDaily.date <= request.train_end
+                )
+                res_excess = await session.execute(stmt_excess)
+                df_excess = pd.DataFrame(res_excess.all(), columns=['date', 'ticker', 'excess_ret'])
+                df_excess_wide = df_excess.pivot(index='date', columns='ticker', values='excess_ret').fillna(0)
+                
+                model = request.model
+                if model == 'CAPM':
+                    X = df_factors[['mkt']]
+                elif model == 'FF3':
+                    X = df_factors[['mkt', 'smb', 'hml']]
+                elif model == 'FF5':
+                    X = df_factors[['mkt', 'smb', 'hml', 'rmw', 'cma']]
+                else:
+                    X = df_factors[['mkt']]
+                
+                reg_results = run_regression(df_excess_wide, X, model)
+                
+                betas_dict = {}
+                alphas_dict = {}
+                for r in reg_results:
+                    t = r['ticker']
+                    alphas_dict[t] = r['alpha']
+                    bd = {}
+                    for f in X.columns:
+                        bd[f] = r[f'beta_{f}']
+                    betas_dict[t] = bd
+                
+                df_betas = pd.DataFrame.from_dict(betas_dict, orient='index')
+                df_alphas = pd.Series(alphas_dict)
+                factor_means = X.mean()
+                
+                mu_annual = estimate_expected_returns(
+                    betas=df_betas,
+                    factor_means=factor_means,
+                    rf_annual=request.rf,
+                    include_alpha=False,
+                    alphas=df_alphas
+                )
+                mu_annual = mu_annual.reindex(df_wide.columns).fillna(0)
+                mu_daily = mu_annual.values / 252.0
             
             if request.objective == 'max_sharpe':
                 res_opt = optimize_max_sharpe(mu_daily, sigma_daily, rf_daily, request.w_max)
