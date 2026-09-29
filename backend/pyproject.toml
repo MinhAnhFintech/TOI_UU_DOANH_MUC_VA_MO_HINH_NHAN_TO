@@ -26,6 +26,10 @@ dependencies = [
     "pandera",
     "python-dotenv",
     "httpx",
+    "greenlet",
+    "asyncpg",
+    "vnstock>=4.0.9",
+    "vnai>=2.6.2",
 ]
 
 [project.optional-dependencies]
