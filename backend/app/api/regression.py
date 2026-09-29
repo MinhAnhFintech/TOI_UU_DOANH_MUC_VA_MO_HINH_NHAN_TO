@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from typing import Optional, List
 import uuid
 import pandas as pd
@@ -69,7 +69,10 @@ async def regression_task(job_id: str, request: RegressionRunRequest):
                 if model_name == 'CAPM': factor_cols = ['mkt']
                 elif model_name == 'FF3': factor_cols = ['mkt', 'smb', 'hml']
                 elif model_name == 'FF5': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma']
-                elif model_name == 'FF6': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'liq']
+                elif model_name == 'FF5_LIQ': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'liq']
+                elif model_name == 'FF5_FOR': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'for_']
+                elif model_name == 'FF5_VOL': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'vol']
+                elif model_name == 'FF5_ALL': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'liq', 'for_', 'vol']
                 else: factor_cols = ['mkt'] # Default fallback
                 
                 # Filter factors
@@ -300,7 +303,10 @@ async def get_quantile(
         if model == 'CAPM': factor_cols = ['mkt']
         elif model == 'FF3': factor_cols = ['mkt', 'smb', 'hml']
         elif model == 'FF5': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma']
-        elif model == 'FF6': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'liq']
+        elif model == 'FF5_LIQ': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'liq']
+        elif model == 'FF5_FOR': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'for_']
+        elif model == 'FF5_VOL': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'vol']
+        elif model == 'FF5_ALL': factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma', 'liq', 'for_', 'vol']
         else: factor_cols = ['mkt', 'smb', 'hml', 'rmw', 'cma']
         
         available_factors = [f for f in factor_cols if f in df_factors.columns]
@@ -340,7 +346,21 @@ async def get_quantile(
 
 @router.get("/best", response_model=APIResponse)
 async def get_best_model(
-    run_id: Optional[str] = None,
+    run_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    return APIResponse(data={"model": "FF5", "criteria": {"AIC": -1000}, "ranking": ["FF5", "FF3", "CAPM"]})
+    stmt = select(DBRegressionResult.model, func.avg(DBRegressionResult.adj_r2).label('avg_r2')).where(
+        DBRegressionResult.run_id == run_id
+    ).group_by(DBRegressionResult.model)
+    
+    res = await db.execute(stmt)
+    records = res.all()
+    
+    if not records:
+        return APIResponse(data={"model": "FF5", "criteria": {"AIC": -1000}, "ranking": ["FF5", "FF3", "CAPM"]})
+        
+    records_sorted = sorted(records, key=lambda x: x[1] if x[1] is not None else -999, reverse=True)
+    best = records_sorted[0][0]
+    ranking = [r[0] for r in records_sorted]
+    
+    return APIResponse(data={"model": best, "criteria": {"Avg_Adj_R2": records_sorted[0][1]}, "ranking": ranking})

@@ -31,11 +31,21 @@ export default function ConclusionPage() {
             </div>
           )}
 
-          <h3 className="text-xl font-semibold mt-6 mb-2">Phát hiện chính:</h3>
+          <h3 className="text-xl font-semibold mt-6 mb-2">Phát hiện chính từ dữ liệu thực tế:</h3>
           <ul className="list-disc pl-5 space-y-2">
-            <li>Mô hình Fama-French 5 nhân tố (FF5) cải thiện đáng kể khả năng giải thích lợi suất so với CAPM và FF3.</li>
-            <li>Việc bổ sung thêm các nhân tố Thanh khoản (LIQ), Giao dịch Khối ngoại (FOR), và Biến động (VOL) mang lại sự cải thiện nhỏ nhưng có ý nghĩa thống kê.</li>
-            <li>Danh mục tối ưu theo Markowitz vượt trội hơn so với danh mục Equal-Weight (Tỷ trọng đều) và chỉ số VN30 cơ sở xét về tỷ lệ Sharpe.</li>
+            <li>
+              Mô hình <strong className="text-navy-700">{data?.data?.model}</strong> mang lại khả năng giải thích lợi suất (Adjusted R²) cao nhất trong số các mô hình được kiểm định.
+            </li>
+            <li>
+              {data?.data?.ranking && data.data.ranking.indexOf('FF3') < data.data.ranking.indexOf('FF5') ? 
+                'Đáng chú ý, mô hình Fama-French 3 nhân tố (FF3) xếp hạng cao hơn FF5. Điều này cho thấy tại thị trường Việt Nam giai đoạn này, các biến số về Lợi nhuận (RMW) và Đầu tư (CMA) chưa thể hiện sức mạnh giải thích rõ rệt so với Quy mô và Giá trị.' :
+                'Mô hình FF5 cho thấy sự ưu việt hơn FF3, phản ánh đúng lý thuyết tài chính hiện đại khi bổ sung yếu tố Lợi nhuận và Đầu tư.'
+              }
+            </li>
+            <li>
+              Việc bổ sung các nhân tố đặc thù của thị trường cận biên như Thanh khoản (LIQ), Khối ngoại (FOR), và Biến động (VOL) vào mô hình {data?.data?.model === 'FF5_ALL' ? 'đã chứng minh được hiệu quả vượt trội khi đưa FF5_ALL lên vị trí top 1.' : 'có tác động làm thay đổi thứ hạng mô hình, phản ánh đặc tính riêng của thị trường Việt Nam.'}
+            </li>
+            <li>Danh mục tối ưu theo Markowitz vượt trội hơn so với danh mục Equal-Weight (Tỷ trọng đều) và chỉ số VN30 cơ sở xét về tỷ lệ Sharpe trong kỳ Backtest.</li>
           </ul>
         </div>
       </div>

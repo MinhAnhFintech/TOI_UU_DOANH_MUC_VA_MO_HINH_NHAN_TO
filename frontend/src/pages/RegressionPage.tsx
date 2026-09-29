@@ -5,6 +5,7 @@ import DataTable from '../components/DataTable';
 import ConfigPanel, { ConfigValues } from '../components/ConfigPanel';
 import { Spinner, JobProgress } from '../components/UI';
 import { useJob } from '../hooks/useJob';
+import { MODELS } from '../lib/constants';
 
 export default function RegressionPage() {
   const { selectedModel, setSelectedModel, runId, setRunId } = useGlobalStore();
@@ -22,7 +23,7 @@ export default function RegressionPage() {
   const handleRun = (formData: ConfigValues) => {
     setSelectedModel(formData.model);
     mutate({
-      models: ['CAPM', 'FF3', 'FF5', 'FF6'],
+      models: MODELS,
       freq: 'daily',
       cov_type: 'HAC',
       start: formData.train_start,
@@ -76,7 +77,7 @@ export default function RegressionPage() {
               onChange={(e) => setSelectedModel(e.target.value)}
               className="rounded-md border-slate-300 shadow-sm focus:border-navy-500 focus:ring-navy-500 sm:text-sm p-2 border"
             >
-              {['CAPM', 'FF3', 'FF5', 'FF6'].map(m => <option key={m} value={m}>{m}</option>)}
+              {MODELS.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
         )}
