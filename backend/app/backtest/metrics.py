@@ -7,7 +7,10 @@ def compute_metrics(
     trading_days: int = 252
 ) -> dict:
     """Performance and risk metrics."""
-    # Assuming nav is a pandas Series of values
+    if nav is None or len(nav) < 2 or not np.isfinite(nav.to_numpy(dtype=float)).all():
+        raise ValueError("At least two finite NAV observations are required")
+    if (nav <= 0).any():
+        raise ValueError("NAV values must remain positive")
     returns = nav.pct_change().dropna()
     
     n_years = len(returns) / trading_days
@@ -22,10 +25,11 @@ def compute_metrics(
     else:
         excess_returns = returns
         
-    sharpe = (excess_returns.mean() / returns.std()) * np.sqrt(trading_days) if returns.std() != 0 else 0
+    excess_std = excess_returns.std()
+    sharpe = (excess_returns.mean() / excess_std) * np.sqrt(trading_days) if excess_std > 0 else 0
     
-    downside_returns = excess_returns[excess_returns < 0]
-    downside_std = downside_returns.std() * np.sqrt(trading_days)
+    downside_squared = np.minimum(excess_returns, 0) ** 2
+    downside_std = np.sqrt(downside_squared.mean()) * np.sqrt(trading_days)
     sortino = (excess_returns.mean() * np.sqrt(trading_days)) / downside_std if downside_std != 0 else 0
     
     cum_max = nav.cummax()
@@ -55,5 +59,5 @@ def compute_rolling_sharpe(
     """Rolling Sharpe ratio with specified window."""
     excess = returns - rf_daily
     mean = excess.rolling(window).mean()
-    std = returns.rolling(window).std()
+    std = excess.rolling(window).std()
     return (mean / std) * np.sqrt(252)

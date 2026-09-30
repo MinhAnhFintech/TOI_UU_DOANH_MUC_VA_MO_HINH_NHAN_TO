@@ -7,23 +7,33 @@ def grs_test(
     factors: np.ndarray,       # (T, K) matrix of factor values
 ) -> dict:
     """Gibbons-Ross-Shanken (1989) test."""
+    alphas = np.asarray(alphas, dtype=float).reshape(-1)
+    residuals = np.asarray(residuals, dtype=float)
+    factors = np.asarray(factors, dtype=float)
+    if factors.ndim == 1:
+        factors = factors.reshape(-1, 1)
+    if residuals.ndim != 2 or factors.ndim != 2:
+        raise ValueError('Residuals and factors must be two-dimensional arrays.')
     T, N = residuals.shape
     K = factors.shape[1]
+    if T != factors.shape[0] or len(alphas) != N:
+        raise ValueError('GRS inputs must have matching observations and assets.')
+    if N < 2 or K == 0 or T <= N + K:
+        raise ValueError('GRS requires T > N + K and at least one asset and factor.')
+    if not (np.isfinite(alphas).all() and np.isfinite(residuals).all() and np.isfinite(factors).all()):
+        raise ValueError('GRS inputs must contain only finite values.')
+    if np.any(np.var(factors, axis=0, ddof=1) <= np.finfo(float).eps):
+        raise ValueError('GRS factors must have non-zero variance.')
     
-    # Covariance matrix of residuals
-    resid_cov = np.cov(residuals, rowvar=False)
+    # The OLS residual covariance uses T-K-1 degrees of freedom.
+    resid_cov = residuals.T @ residuals / (T - K - 1)
     
     # Covariance matrix of factors and mean of factors
-    factor_cov = np.cov(factors, rowvar=False)
+    factor_cov = np.cov(factors, rowvar=False, ddof=1)
     factor_mean = np.mean(factors, axis=0)
     
-    try:
-        resid_cov_inv = np.linalg.inv(resid_cov)
-        factor_cov_inv = np.linalg.inv(factor_cov) if K > 1 else 1/np.var(factors)
-    except np.linalg.LinAlgError:
-        # Fallback to pseudo-inverse if singular
-        resid_cov_inv = np.linalg.pinv(resid_cov)
-        factor_cov_inv = np.linalg.pinv(factor_cov) if K > 1 else 1/np.var(factors)
+    resid_cov_inv = np.linalg.inv(resid_cov)
+    factor_cov_inv = np.linalg.inv(factor_cov) if K > 1 else 1 / np.var(factors, ddof=1)
     
     # Quadratic forms
     alpha_quad = alphas.T @ resid_cov_inv @ alphas

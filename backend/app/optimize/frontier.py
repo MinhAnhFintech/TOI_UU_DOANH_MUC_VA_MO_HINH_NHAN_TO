@@ -39,19 +39,26 @@ def compute_frontier(
         Dict with frontier, tangency, cml, random, assets
     """
     N = len(mu)
+    mu = np.asarray(mu, dtype=float)
+    sigma = np.asarray(sigma, dtype=float)
+    if N == 0 or sigma.shape != (N, N) or not np.isfinite(mu).all() or not np.isfinite(sigma).all():
+        raise ValueError("mu and sigma must be finite and have matching dimensions")
+    if N * w_max < 1 - 1e-10:
+        raise ValueError(f"Infeasible weight cap: {N} assets × {w_max:.4f} < 1")
     if tickers is None:
         tickers = [f'Stock_{i}' for i in range(N)]
 
     # Scale to annualized for numerical stability
     mu_ann = mu * 252
     sigma_ann = sigma * 252 + np.eye(N) * 1e-6
-    rf_ann = ((1 + rf)**252 - 1) if rf < 0.01 else rf
+    rf_ann = rf
 
-    # 1. Tangency portfolio (Max Sharpe) - Pass daily, since it scales internally
+    # 1. Tangency portfolio (Max Sharpe). mu and sigma are daily; rf is annual.
     tangency = optimize_max_sharpe(mu, sigma, rf, w_max)
     # Scale tangency output to annual
-    tangency['expected_return'] *= 252
-    tangency['volatility'] *= np.sqrt(252)
+    tangency_weights = tangency['weights']
+    tangency['expected_return'] = float(np.sum(tangency_weights * mu) * 252)
+    tangency['volatility'] = float(np.sqrt(tangency_weights @ sigma @ tangency_weights) * np.sqrt(252))
     tangency['sharpe'] = (tangency['expected_return'] - rf_ann) / tangency['volatility'] if tangency['volatility'] > 0 else 0
 
     # 2. Minimum variance portfolio - Pass daily
@@ -63,7 +70,15 @@ def compute_frontier(
 
     # 3. Frontier points: minimize variance for each target return
     min_ret = min_var_ret
-    max_ret = float(np.max(mu_ann))
+    max_weights = np.zeros(N)
+    remaining = 1.0
+    for asset_idx in np.argsort(mu_ann)[::-1]:
+        allocation = min(w_max, remaining)
+        max_weights[asset_idx] = allocation
+        remaining -= allocation
+        if remaining <= 1e-12:
+            break
+    max_ret = float(max_weights @ mu_ann)
     target_returns = np.linspace(min_ret, max_ret, n_points)
 
     frontier = []
@@ -81,9 +96,11 @@ def compute_frontier(
         try:
             res = minimize(variance, w0, method='SLSQP', bounds=bounds,
                            constraints=constraints, options={'ftol': 1e-12, 'maxiter': 1000})
-            best_w = res.x if res.success or not np.isnan(res.fun) else w0
-            best_w = np.clip(best_w, 0, w_max)
-            best_w /= np.sum(best_w)
+            if not res.success or not np.isfinite(res.fun):
+                continue
+            best_w = np.asarray(res.x, dtype=float)
+            if np.any(best_w < -1e-7) or np.any(best_w > w_max + 1e-7) or not np.isclose(best_w.sum(), 1, atol=1e-6):
+                continue
             
             vol = float(np.sqrt(best_w.T @ sigma_ann @ best_w))
             ret = float(np.sum(best_w * mu_ann))
@@ -102,30 +119,38 @@ def compute_frontier(
     tang_ret = tangency['expected_return']
     tang_vol = tangency['volatility']
     if tang_vol > 0:
-        slope = (tang_ret - rf) / tang_vol
+        slope = (tang_ret - rf_ann) / tang_vol
         for v in np.linspace(0, tang_vol * 1.5, 20):
-            cml.append({'ret': float(rf + slope * v), 'vol': float(v)})
+            cml.append({'ret': float(rf_ann + slope * v), 'vol': float(v)})
 
     # 5. Random portfolios (Monte Carlo cloud)
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     random_portfolios = []
     for _ in range(n_random):
-        w = np.random.random(N)
-        w = np.minimum(w, w_max)        # Enforce w_max
-        w = w / w.sum()                  # Normalize to sum=1
+        raw = rng.random(N)
+        # Project onto the capped simplex: sum(w)=1 and 0 <= w_i <= w_max.
+        low, high = raw.min() - w_max, raw.max()
+        for _step in range(60):
+            shift = (low + high) / 2
+            if np.clip(raw - shift, 0, w_max).sum() > 1:
+                low = shift
+            else:
+                high = shift
+        w = np.clip(raw - (low + high) / 2, 0, w_max)
+        w /= w.sum()
 
-        ret = float(np.sum(w * mu))
-        vol = float(np.sqrt(w.T @ sigma @ w))
-        sharpe = float((ret - rf) / vol) if vol > 0 else 0
+        ret = float(np.sum(w * mu_ann))
+        vol = float(np.sqrt(w.T @ sigma_ann @ w))
+        sharpe = float((ret - rf_ann) / vol) if vol > 0 else 0
         random_portfolios.append({'ret': ret, 'vol': vol, 'sharpe': sharpe})
 
     # 6. Individual assets
     assets = []
     for i in range(N):
-        vol = float(np.sqrt(sigma[i, i]))
+        vol = float(np.sqrt(sigma_ann[i, i]))
         assets.append({
             'ticker': tickers[i],
-            'ret': float(mu[i]),
+            'ret': float(mu_ann[i]),
             'vol': vol
         })
 
@@ -141,4 +166,3 @@ def compute_frontier(
         'random': random_portfolios,
         'assets': assets
     }
-

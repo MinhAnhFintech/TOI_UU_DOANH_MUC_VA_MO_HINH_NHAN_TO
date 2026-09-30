@@ -30,11 +30,19 @@ export default function DataTable<TData>({ columns, data, title }: DataTableProp
   });
 
   const exportCSV = () => {
-    const headers = columns.map(c => c.header).join(',');
-    const rows = data.map(row => 
-      columns.map(c => (row as any)[c.accessorKey] ?? '').join(',')
-    ).join('\n');
-    const blob = new Blob([`${headers}\n${rows}`], { type: 'text/csv;charset=utf-8;' });
+    const escape = (value: unknown) => {
+      const text = value == null ? '' : String(value);
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const leafColumns = table.getAllLeafColumns();
+    const headers = leafColumns.map((column) => {
+      const header = column.columnDef.header;
+      return escape(typeof header === 'string' ? header : column.id);
+    }).join(',');
+    const rows = table.getCoreRowModel().rows.map((row) =>
+      leafColumns.map((column) => escape(row.getValue(column.id))).join(',')
+    ).join('\r\n');
+    const blob = new Blob([`\uFEFF${headers}\r\n${rows}`], { type: 'text/csv;charset=utf-8;' });
     saveAs(blob, `${title || 'export'}.csv`);
   };
 

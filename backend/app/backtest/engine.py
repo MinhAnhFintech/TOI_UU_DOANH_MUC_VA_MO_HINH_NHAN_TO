@@ -11,7 +11,8 @@ def run_backtest(
     rebalance_freq: str = 'quarterly',
     fee_buy: float = 0.0015,
     fee_sell: float = 0.0025,
-    initial_capital: float = 100.0
+    initial_capital: float = 100.0,
+    rf_daily: float = 0.0
 ) -> pd.DataFrame:
     """Backtest a portfolio with weight drift and transaction costs.
 
@@ -23,8 +24,8 @@ def run_backtest(
     At rebalance dates, weights are reset to target and transaction costs applied:
         cost_t = Σ max(Δw_i, 0) × fee_buy + Σ max(−Δw_i, 0) × fee_sell
 
-    Mode 1 (split): Fixed weights from Train → hold through Test period.
-    Mode 2 (rolling): Re-optimize every rebalance period (caller handles this).
+    The target weights are estimated on the training period, then restored at
+    the selected monthly or quarterly rebalance dates during the test period.
 
     NO look-ahead bias: weights are determined BEFORE the test period begins.
 
@@ -46,6 +47,8 @@ def run_backtest(
     end_dt = pd.Timestamp(end_date)
 
     df = prices.copy()
+    if df.empty or not {'date', 'ticker'}.issubset(df.columns):
+        raise ValueError("prices must contain at least one row and date/ticker columns")
     df['date'] = pd.to_datetime(df['date'])
     df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
 
@@ -63,6 +66,10 @@ def run_backtest(
 
     # Ensure weights match tickers
     N = len(tickers)
+    if N == 0 or not np.isfinite(weights).all():
+        raise ValueError("weights and prices must contain at least one valid asset")
+    if not np.isclose(np.sum(weights), 1.0, atol=1e-6) or np.any(weights < -1e-8):
+        raise ValueError("weights must be non-negative and sum to 1")
     if len(weights) != N:
         raise ValueError(f"weights length ({len(weights)}) != number of tickers ({N})")
 
@@ -90,29 +97,35 @@ def run_backtest(
     for i, date in enumerate(dates):
         daily_ret = ret_wide.loc[date].values  # (N,) returns for each stock
 
-        # Portfolio return with current (possibly drifted) weights
+        # Invest at the first observed close so all benchmarks share the same base date.
+        if i == 0:
+            daily_ret = np.zeros(N, dtype=float)
+
+        # Returns accrue against holdings entering the day.
         port_ret = float(np.sum(w * daily_ret))
+        post_return_weights = w * (1 + daily_ret)
+        gross_factor = 1 + port_ret
+        if gross_factor > 0 and np.isfinite(gross_factor):
+            post_return_weights = post_return_weights / gross_factor
+        else:
+            post_return_weights = w.copy()
 
         # Check if this is a rebalance date
         turnover = 0.0
         cost = 0.0
         if date in rebalance_set and i > 0:
-            # Compute turnover = total absolute weight changes
-            turnover = float(np.sum(np.abs(target_weights - w)))
+            # Rebalance from actual post-return weights at the close.
+            turnover = float(np.sum(np.abs(target_weights - post_return_weights)))
             # Compute transaction costs
-            cost = compute_transaction_costs(w, target_weights, fee_buy, fee_sell)
+            cost = compute_transaction_costs(post_return_weights, target_weights, fee_buy, fee_sell)
             # Reset to target weights
             w = target_weights.copy()
         else:
-            # Let weights drift with returns
-            w_new = w * (1 + daily_ret)
-            w_sum = w_new.sum()
-            if w_sum > 0 and not np.isnan(w_sum):
-                w = w_new / w_sum
-            # If sum is 0 or NaN (all stocks -100%), keep previous weights
+            w = post_return_weights
 
         # Update NAV
-        nav = nav * (1 + port_ret - cost)
+        net_factor = gross_factor * (1 - cost)
+        nav = nav * net_factor
 
         # Drawdown
         cum_max_nav = max(cum_max_nav, nav)
@@ -121,7 +134,7 @@ def run_backtest(
         results.append({
             'date': date,
             'nav': nav,
-            'ret': port_ret - cost,
+            'ret': net_factor - 1,
             'drawdown': drawdown,
             'turnover': turnover,
             'cost': cost
@@ -131,9 +144,9 @@ def run_backtest(
 
     # Add rolling Sharpe (60-day window)
     if len(result_df) > 60:
-        ret_series = result_df['ret']
-        rolling_mean = ret_series.rolling(60).mean()
-        rolling_std = ret_series.rolling(60).std()
+        excess_series = result_df['ret'] - rf_daily
+        rolling_mean = excess_series.rolling(60).mean()
+        rolling_std = excess_series.rolling(60).std()
         result_df['rolling_sharpe'] = (rolling_mean / rolling_std) * np.sqrt(252)
     else:
         result_df['rolling_sharpe'] = np.nan

@@ -8,7 +8,7 @@ from datetime import date
 from app.core.database import get_db
 from app.schemas.common import APIResponse
 from app.schemas.factors import FactorRecord, FactorStat, CorrelationMatrix, CumulativeReturn, FactorComparison
-from app.db.models import FactorsDaily
+from app.db.models import FactorsDaily, KFFfactorsDaily
 from app.factors.stats import (
     compute_factor_stats,
     compute_correlation_matrix,
@@ -126,4 +126,47 @@ async def compare_with_kf(
     factor: str,
     db: AsyncSession = Depends(get_db)
 ):
-    return APIResponse(data={"dates": [], "vn": [], "kf": [], "corr": 0.0})
+    factor_columns = {
+        'mkt': (FactorsDaily.mkt, KFFfactorsDaily.mkt_rf),
+        'smb': (FactorsDaily.smb, KFFfactorsDaily.smb),
+        'hml': (FactorsDaily.hml, KFFfactorsDaily.hml),
+        'rmw': (FactorsDaily.rmw, KFFfactorsDaily.rmw),
+        'cma': (FactorsDaily.cma, KFFfactorsDaily.cma),
+    }
+    normalized_factor = factor.strip().lower()
+    if normalized_factor not in factor_columns:
+        return APIResponse(data=[], error={
+            "code": 422,
+            "message": "Ken French comparison supports mkt, smb, hml, rmw and cma.",
+        })
+
+    vn_column, kf_column = factor_columns[normalized_factor]
+    stmt = select(FactorsDaily.date, vn_column, kf_column).join(
+        KFFfactorsDaily, KFFfactorsDaily.date == FactorsDaily.date
+    ).order_by(FactorsDaily.date)
+    rows = (await db.execute(stmt)).all()
+    frame = pd.DataFrame(rows, columns=['date', 'vn', 'kf'])
+    frame['vn'] = pd.to_numeric(frame['vn'], errors='coerce')
+    frame['kf'] = pd.to_numeric(frame['kf'], errors='coerce')
+    frame = frame.replace([float('inf'), float('-inf')], float('nan')).dropna()
+    if frame.empty:
+        return APIResponse(data={
+            "factor": normalized_factor,
+            "dates": [],
+            "vn": [],
+            "kf": [],
+            "corr": None,
+            "n_obs": 0,
+        })
+
+    correlation = None
+    if len(frame) >= 2 and frame['vn'].nunique() > 1 and frame['kf'].nunique() > 1:
+        correlation = float(frame['vn'].corr(frame['kf']))
+    return APIResponse(data={
+        "factor": normalized_factor,
+        "dates": [day.isoformat() for day in frame['date']],
+        "vn": frame['vn'].astype(float).tolist(),
+        "kf": frame['kf'].astype(float).tolist(),
+        "corr": correlation,
+        "n_obs": int(len(frame)),
+    })

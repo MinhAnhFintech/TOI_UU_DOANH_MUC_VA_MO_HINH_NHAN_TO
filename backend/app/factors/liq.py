@@ -32,6 +32,8 @@ def build_liq(
     Returns:
         Series indexed by date with LIQ factor values
     """
+    if window < 1 or not 0 < pct_threshold < 0.5:
+        raise ValueError("window must be positive and pct_threshold must be between 0 and 0.5")
     prices = prices.copy()
     prices['date'] = pd.to_datetime(prices['date'])
     prices = prices.sort_values(['ticker', 'date'])
@@ -66,6 +68,9 @@ def build_liq(
     illiq_wide = prices.pivot_table(index='date', columns='ticker', values='illiq')
     cap_wide = prices.pivot_table(index='date', columns='ticker', values='market_cap')
     
+    illiq_wide = illiq_wide.shift(1)  # Lag signal by 1 day to prevent look-ahead bias
+    cap_wide_lagged = cap_wide.shift(1)
+    
     for date in ret_wide.index:
         illiq_day = illiq_wide.loc[date].dropna()
         if len(illiq_day) < 6:
@@ -74,6 +79,8 @@ def build_liq(
         # Top 30% = most illiquid, Bottom 30% = most liquid
         top_pct = illiq_day.quantile(1 - pct_threshold)
         bot_pct = illiq_day.quantile(pct_threshold)
+        if not np.isfinite(top_pct) or not np.isfinite(bot_pct) or top_pct <= bot_pct:
+            continue
         
         illiquid_tickers = illiq_day[illiq_day >= top_pct].index.tolist()
         liquid_tickers = illiq_day[illiq_day <= bot_pct].index.tolist()
@@ -82,8 +89,8 @@ def build_liq(
             continue
         
         # Value-weighted returns
-        r_illiq = _vw_return(ret_wide, cap_wide, illiquid_tickers, date)
-        r_liquid = _vw_return(ret_wide, cap_wide, liquid_tickers, date)
+        r_illiq = _vw_return(ret_wide, cap_wide_lagged, illiquid_tickers, date)
+        r_liquid = _vw_return(ret_wide, cap_wide_lagged, liquid_tickers, date)
         
         results.append({'date': date, 'liq': r_illiq - r_liquid})
     
@@ -97,13 +104,13 @@ def _vw_return(ret_wide, cap_wide, tickers, date):
     """Value-weighted return for a group of tickers."""
     available = [t for t in tickers if t in ret_wide.columns]
     if not available:
-        return 0.0
+        return np.nan
     rets = ret_wide.loc[date, available].dropna()
     if rets.empty:
-        return 0.0
+        return np.nan
     if date in cap_wide.index:
-        caps = cap_wide.loc[date, rets.index].dropna()
-        if not caps.empty and caps.sum() > 0:
+        caps = cap_wide.loc[date, rets.index]
+        if caps.notna().all() and (caps > 0).all() and caps.sum() > 0:
             w = caps / caps.sum()
             return float((w * rets[w.index]).sum())
-    return float(rets.mean())
+    return np.nan

@@ -8,6 +8,7 @@ import { Spinner } from '../components/UI';
 export default function QuantilePage() {
   const { selectedModel } = useGlobalStore();
   const [ticker, setTicker] = useState('ACB');
+  const [factor, setFactor] = useState('');
   const { data: stocksData } = useStocks();
   const { data, isLoading } = useQuantileResults(selectedModel, ticker);
 
@@ -25,22 +26,22 @@ export default function QuantilePage() {
     const keys = Object.keys(data.data[0].coefficients);
     if (keys.length === 0) return null;
     
-    const factor = keys[0]; // plot the first factor (usually mkt)
-    const coefs = data.data.map((d: any) => d.coefficients[factor]);
-    const lower = data.data.map((d: any) => d.lower_ci?.[factor] || 0);
-    const upper = data.data.map((d: any) => d.upper_ci?.[factor] || 0);
+    const plotFactor = factor || keys[0];
+    const coefs = data.data.map((d: any) => d.coefficients[plotFactor]);
+    const lower = data.data.map((d: any) => d.lower_ci?.[plotFactor] || 0);
+    const upper = data.data.map((d: any) => d.upper_ci?.[plotFactor] || 0);
 
     return {
       tooltip: { trigger: 'axis' },
       xAxis: { type: 'category', data: taus, name: 'Phân vị (tau)' },
-      yAxis: { type: 'value', name: `Hệ số (${factor.toUpperCase()})` },
+      yAxis: { type: 'value', name: `Hệ số (${plotFactor.toUpperCase()})` },
       series: [
         { name: 'Hệ số', type: 'line', data: coefs, lineStyle: { color: '#1F2A4A', width: 2 } },
         { name: 'Biên dưới (CI)', type: 'line', data: lower, lineStyle: { type: 'dashed', color: '#ef4444' }, showSymbol: false },
         { name: 'Biên trên (CI)', type: 'line', data: upper, lineStyle: { type: 'dashed', color: '#ef4444' }, showSymbol: false },
       ]
     };
-  }, [data]);
+  }, [data, factor]);
 
   return (
     <div className="space-y-6">
@@ -53,6 +54,17 @@ export default function QuantilePage() {
         >
           {tickers.map((t: string) => (
             <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+        
+        <label className="text-sm font-medium text-slate-700 ml-4">Nhân tố:</label>
+        <select
+          value={factor || (data?.data?.[0]?.coefficients ? Object.keys(data.data[0].coefficients)[0] : '')}
+          onChange={(e) => setFactor(e.target.value)}
+          className="border rounded px-3 py-1 text-sm"
+        >
+          {data?.data?.[0]?.coefficients && Object.keys(data.data[0].coefficients).map(k => (
+            <option key={k} value={k}>{k.toUpperCase()}</option>
           ))}
         </select>
       </div>

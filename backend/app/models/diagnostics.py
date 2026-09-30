@@ -28,14 +28,17 @@ def compute_diagnostics(
     
     # 1. VIF (Variance Inflation Factor)
     vif_dict = {}
-    X_array = X.values if hasattr(X, 'values') else np.array(X)
-    if X_array.shape[1] > 1:
-        for i, col in enumerate(X.columns if hasattr(X, 'columns') else range(X_array.shape[1])):
+    exog = model_result.model.exog
+    exog_names = model_result.model.exog_names
+    if exog.shape[1] > 1:
+        for i, col_name in enumerate(exog_names):
+            if col_name == 'const':
+                continue
             try:
-                vif_val = variance_inflation_factor(X_array, i)
-                vif_dict[str(col)] = float(vif_val)
+                vif_val = variance_inflation_factor(exog, i)
+                vif_dict[col_name] = float(vif_val)
             except Exception:
-                vif_dict[str(col)] = float('nan')
+                vif_dict[col_name] = float('nan')
     
     # 2. Durbin-Watson
     dw = float(durbin_watson(resid))

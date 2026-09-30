@@ -6,10 +6,12 @@ import uuid
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import asyncio
+import json
 
 from app.schemas.common import APIResponse
 from app.schemas.portfolio import OptimizeRequest, FrontierResponse
-from app.db.models import Job, PortfolioWeight as DBPortfolioWeight, FrontierPoint as DBFrontierPoint, PriceDaily, Stock
+from app.db.models import Job, PortfolioRun as DBPortfolioRun, PortfolioWeight as DBPortfolioWeight, FrontierPoint as DBFrontierPoint, PriceDaily, Stock
 from app.core.database import get_db, AsyncSessionLocal
 from app.optimize.markowitz import optimize_max_sharpe, optimize_min_variance
 
@@ -22,6 +24,7 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
             if not job:
                 return
             job.status = 'running'
+            job.progress = 5.0
             await session.commit()
             
             # Fetch daily returns for training period
@@ -34,20 +37,18 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
             df = pd.DataFrame(prices, columns=['date', 'ticker', 'ret'])
             if df.empty:
                 raise ValueError("No data found for training period.")
+            job.progress = 15.0
+            await session.commit()
             
-            df_wide = df.pivot(index='date', columns='ticker', values='ret').fillna(0)
+            df_wide = df.pivot(index='date', columns='ticker', values='ret').sort_index()
+            df_wide = df_wide.replace([np.inf, -np.inf], np.nan)
+            if len(df_wide) < 30:
+                raise ValueError("Training period has fewer than 30 market observations")
+            coverage = df_wide.notna().mean()
+            df_wide = df_wide.loc[:, coverage >= 0.95].dropna(axis=0, how='any')
+            if df_wide.shape[1] == 0 or len(df_wide) < 30:
+                raise ValueError("Insufficient complete return data for portfolio optimization")
             rf_daily = (1 + request.rf)**(1/252) - 1
-
-            # --- COVARIANCE ---
-            from app.optimize.covariance import estimate_covariance
-            method_map = {
-                'Sample Covariance': 'sample',
-                'Ledoit-Wolf Shrinkage': 'ledoit_wolf',
-                'Semi-Covariance': 'semi'
-            }
-            method = method_map.get(request.cov_estimator, 'sample')
-            sigma_annual = estimate_covariance(df_wide, method=method, annualize=True, rf_daily=rf_daily)
-            sigma_daily = sigma_annual / 252.0
 
             # --- EXPECTED RETURNS ---
             from app.db.models import FactorsDaily
@@ -61,11 +62,13 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
             res_f = await session.execute(stmt_f)
             factors = res_f.scalars().all()
             if not factors:
-                mu_daily = df_wide.mean().values
+                raise ValueError("No factor observations are available for the training period")
             else:
                 df_factors = pd.DataFrame([f.__dict__ for f in factors]).drop(columns=['_sa_instance_state'])
+                df_factors.rename(columns={'for_factor': 'for_'}, inplace=True)
                 df_factors['date'] = pd.to_datetime(df_factors['date'])
                 df_factors.set_index('date', inplace=True)
+                df_factors = df_factors.replace([np.inf, -np.inf], np.nan)
                 
                 stmt_excess = select(PriceDaily.date, PriceDaily.ticker, PriceDaily.excess_ret).where(
                     PriceDaily.date >= request.train_start,
@@ -73,19 +76,22 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
                 )
                 res_excess = await session.execute(stmt_excess)
                 df_excess = pd.DataFrame(res_excess.all(), columns=['date', 'ticker', 'excess_ret'])
-                df_excess_wide = df_excess.pivot(index='date', columns='ticker', values='excess_ret').fillna(0)
+                df_excess_wide = df_excess.pivot(index='date', columns='ticker', values='excess_ret')
+                df_excess_wide = df_excess_wide.replace([np.inf, -np.inf], np.nan)
                 
                 model = request.model
-                if model == 'CAPM':
-                    X = df_factors[['mkt']]
-                elif model == 'FF3':
-                    X = df_factors[['mkt', 'smb', 'hml']]
-                elif model == 'FF5':
-                    X = df_factors[['mkt', 'smb', 'hml', 'rmw', 'cma']]
-                else:
-                    X = df_factors[['mkt']]
+                from app.models.registry import get_model_factors
+                factor_cols = get_model_factors(model)
+                missing_factors = [name for name in factor_cols if name not in df_factors.columns]
+                if missing_factors:
+                    raise ValueError(f"Selected model is missing factor data: {', '.join(missing_factors)}")
+                X = df_factors[factor_cols].dropna()
+                if len(X) < 30:
+                    raise ValueError("Fewer than 30 complete factor observations are available")
                 
-                reg_results = run_regression(df_excess_wide, X, model)
+                reg_results = await asyncio.to_thread(run_regression, df_excess_wide, X, model)
+                if not reg_results:
+                    raise ValueError("The selected factor model could not estimate any stock betas")
                 
                 betas_dict = {}
                 alphas_dict = {}
@@ -94,7 +100,8 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
                     alphas_dict[t] = r['alpha']
                     bd = {}
                     for f in X.columns:
-                        bd[f] = r[f'beta_{f}']
+                        result_name = 'for' if f == 'for_' else f
+                        bd[f] = r[f'beta_{result_name}']
                     betas_dict[t] = bd
                 
                 df_betas = pd.DataFrame.from_dict(betas_dict, orient='index')
@@ -108,13 +115,33 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
                     include_alpha=False,
                     alphas=df_alphas
                 )
-                mu_annual = mu_annual.reindex(df_wide.columns).fillna(0)
+                eligible = df_wide.columns.intersection(mu_annual.index)
+                if len(eligible) == 0:
+                    raise ValueError("No stocks have both valid returns and factor betas")
+                df_wide = df_wide[eligible]
+                mu_annual = mu_annual.reindex(eligible)
+                if not np.isfinite(mu_annual.values).all():
+                    raise ValueError("Expected returns contain missing or invalid values")
                 mu_daily = mu_annual.values / 252.0
+
+            from app.optimize.covariance import estimate_covariance
+            method_map = {
+                'sample': 'sample', 'Sample Covariance': 'sample',
+                'ledoit_wolf': 'ledoit_wolf', 'Ledoit-Wolf Shrinkage': 'ledoit_wolf',
+                'semi': 'semi', 'Semi-Covariance': 'semi',
+            }
+            method = method_map.get(request.cov_estimator)
+            if method is None:
+                raise ValueError(f"Unknown covariance estimator: {request.cov_estimator}")
+            sigma_annual = estimate_covariance(df_wide, method=method, annualize=True, rf_daily=rf_daily)
+            sigma_daily = sigma_annual / 252.0
             
             if request.objective == 'max_sharpe':
-                res_opt = optimize_max_sharpe(mu_daily, sigma_daily, rf_daily, request.w_max)
+                res_opt = await asyncio.to_thread(optimize_max_sharpe, mu_daily, sigma_daily, request.rf, request.w_max)
             else:
-                res_opt = optimize_min_variance(sigma_daily, request.w_max)
+                res_opt = await asyncio.to_thread(optimize_min_variance, sigma_daily, request.w_max)
+            job.progress = 65.0
+            await session.commit()
             
             run_id = job_id
             tickers = df_wide.columns
@@ -125,7 +152,7 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
             await session.execute(delete(DBFrontierPoint).where(DBFrontierPoint.run_id == run_id))
             
             for i, t in enumerate(tickers):
-                if weights[i] > 1e-4:
+                if weights[i] > 0.0:
                     db_w = DBPortfolioWeight(
                         run_id=run_id,
                         ticker=t,
@@ -137,9 +164,9 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
             
             from app.optimize.frontier import compute_frontier
             
-            frontier_data = compute_frontier(
+            frontier_data = await asyncio.to_thread(compute_frontier,
                 mu_daily, sigma_daily, request.rf, request.w_max, 
-                n_points=20, n_random=0, tickers=list(tickers)
+                n_points=30, n_random=0, tickers=list(tickers)
             )
             
             # Save frontier points
@@ -169,12 +196,31 @@ async def portfolio_task(job_id: str, request: OptimizeRequest):
             job.status = 'done'
             job.progress = 100.0
             job.run_id = run_id
+            run_config = {
+                'model': request.model,
+                'cov_estimator': request.cov_estimator,
+                'w_max': request.w_max,
+                'rf': request.rf,
+                'objective': request.objective,
+                'train_start': request.train_start.isoformat(),
+                'train_end': request.train_end.isoformat(),
+            }
+            session.add(DBPortfolioRun(
+                run_id=run_id,
+                config_json=json.dumps(run_config, sort_keys=True),
+                config_hash=None,
+                best_model=request.model,
+                created_at=datetime.utcnow(),
+            ))
             await session.commit()
             
         except Exception as e:
-            job.status = 'error'
-            job.error = str(e)
-            await session.commit()
+            await session.rollback()
+            job = await session.get(Job, job_id)
+            if job:
+                job.status = 'error'
+                job.error = str(e)
+                await session.commit()
 
 @router.post("/optimize", response_model=APIResponse)
 async def optimize_portfolio(
@@ -195,16 +241,18 @@ async def get_weights(
     run_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(DBPortfolioWeight).where(DBPortfolioWeight.run_id == run_id)
+    stmt = select(DBPortfolioWeight, Stock.sector).outerjoin(
+        Stock, Stock.ticker == DBPortfolioWeight.ticker
+    ).where(DBPortfolioWeight.run_id == run_id)
     res = await db.execute(stmt)
     data = []
-    for row in res.scalars().all():
+    for row, sector in res.all():
         data.append({
             "ticker": row.ticker,
             "weight": row.weight,
             "mu": row.mu,
             "sigma": row.sigma,
-            "sector": "N/A"
+            "sector": sector or "N/A"
         })
     return APIResponse(data=data)
 
@@ -224,10 +272,18 @@ async def get_frontier(
         else:
             frontier.append(pt)
             
+    cml = []
+    if tangency:
+        rf = tangency['ret'] - tangency['sharpe'] * tangency['vol']
+        cml = [
+            {"vol": 0.0, "ret": rf},
+            {"vol": tangency['vol'] * 1.5, "ret": rf + tangency['sharpe'] * (tangency['vol'] * 1.5)}
+        ]
+        
     return APIResponse(data={
         "frontier": frontier,
         "tangency": tangency,
-        "cml": [],
+        "cml": cml,
         "random": [],
         "assets": []
     })

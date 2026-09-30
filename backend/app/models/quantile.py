@@ -26,44 +26,42 @@ def run_quantile_regression(
     if taus is None:
         taus = [0.1, 0.25, 0.5, 0.75, 0.9]
     
-    # Align data and drop NaN
-    common_idx = excess_returns.dropna().index.intersection(factors.dropna().index)
-    y = excess_returns.loc[common_idx].values
-    X = sm.add_constant(factors.loc[common_idx])
+    taus = [float(tau) for tau in taus]
+    if not taus or any(not 0 < tau < 1 for tau in taus):
+        raise ValueError('Each quantile must be strictly between 0 and 1.')
+    taus = sorted(set(taus))
+
+    clean_factors = factors.replace([np.inf, -np.inf], np.nan)
+    panel = pd.concat([excess_returns.rename('_y'), clean_factors], axis=1)
+    panel = panel.replace([np.inf, -np.inf], np.nan).dropna()
+    if len(panel) < max(30, clean_factors.shape[1] + 3):
+        raise ValueError('At least 30 complete observations are required for quantile regression.')
+    y = panel['_y'].to_numpy(dtype=float)
+    X = sm.add_constant(panel.drop(columns='_y'), has_constant='add')
+    if np.linalg.matrix_rank(X.to_numpy(dtype=float)) < X.shape[1]:
+        raise ValueError('Quantile regression factors are collinear on the selected sample.')
     
     results = []
     
     for tau in taus:
         try:
-            model = QuantReg(y, X)
-            res = model.fit(q=tau, max_iter=1000)
-            
-            # Get confidence intervals
-            conf_int = res.conf_int(alpha=0.05)
-            
-            factor_names = ['const'] + list(factors.columns)
-            for i, factor in enumerate(factor_names):
-                results.append({
-                    'tau': float(tau),
-                    'factor': factor,
-                    'coef': float(res.params.iloc[i]),
-                    'ci_low': float(conf_int.iloc[i, 0]),
-                    'ci_high': float(conf_int.iloc[i, 1]),
-                    't_stat': float(res.tvalues.iloc[i]),
-                    'p_value': float(res.pvalues.iloc[i])
-                })
-        except Exception as e:
-            # If quantile regression fails, add None results
-            factor_names = ['const'] + list(factors.columns)
-            for factor in factor_names:
-                results.append({
-                    'tau': float(tau),
-                    'factor': factor,
-                    'coef': None,
-                    'ci_low': None,
-                    'ci_high': None,
-                    't_stat': None,
-                    'p_value': None
-                })
+            res = QuantReg(y, X).fit(q=tau, max_iter=1000)
+        except Exception as exc:
+            raise RuntimeError(f'Quantile regression failed for tau={tau:g}: {exc}') from exc
+
+        conf_int = np.asarray(res.conf_int(alpha=0.05), dtype=float)
+        params = np.asarray(res.params, dtype=float)
+        t_values = np.asarray(res.tvalues, dtype=float)
+        p_values = np.asarray(res.pvalues, dtype=float)
+        for i, factor in enumerate(X.columns):
+            results.append({
+                'tau': float(tau),
+                'factor': str(factor),
+                'coef': float(params[i]),
+                'ci_low': float(conf_int[i, 0]),
+                'ci_high': float(conf_int[i, 1]),
+                't_stat': float(t_values[i]),
+                'p_value': float(p_values[i]),
+            })
     
     return results

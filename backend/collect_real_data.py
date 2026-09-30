@@ -20,12 +20,12 @@ def run():
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = SessionLocal()
 
-    print("1. Đang dọn dẹp dữ liệu cũ (Mock data)...")
-    session.query(PriceDaily).delete()
-    session.query(IndexDaily).delete()
-    session.query(RiskFree).delete()
-    session.query(Stock).delete()
-    session.commit()
+    print("1. Đang cập nhật dữ liệu; các quan sát hiện có sẽ được giữ lại.")
+
+    def upsert(records):
+        for record in records:
+            session.merge(record)
+        session.commit()
 
     vn30_tickers = [
         "ACB", "BCM", "BID", "BVH", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG", 
@@ -36,8 +36,22 @@ def run():
     start_date = "2020-01-01"
     end_date = "2026-12-31"
     
-    for t in vn30_tickers:
-        session.add(Stock(ticker=t, company_name=f"Công ty {t}", sector="N/A", listing_date=date(2010, 1, 1)))
+    existing_stocks = {
+        stock.ticker: stock
+        for stock in session.query(Stock).filter(Stock.ticker.in_(vn30_tickers)).all()
+    }
+    # Older runs filled fabricated labels and listing dates; clear only those
+    # exact placeholders and leave user-supplied metadata intact.
+    for ticker, stock in existing_stocks.items():
+        if (
+            stock.company_name == f"Công ty {ticker}"
+            and stock.sector == "N/A"
+            and stock.listing_date == date(2010, 1, 1)
+        ):
+            stock.company_name = None
+            stock.sector = None
+            stock.listing_date = None
+    session.add_all([Stock(ticker=ticker) for ticker in vn30_tickers if ticker not in existing_stocks])
     session.commit()
     print("Đã thêm danh sách 30 mã cổ phiếu VN30.")
 
@@ -49,10 +63,23 @@ def run():
         try:
             df = Quote(symbol=ticker, source='VCI').history(start=start_date, end=end_date)
             if df is not None and not df.empty:
+                df = df.sort_values('time').copy()
+                price_col = 'adj_close' if 'adj_close' in df.columns else 'close'
+                df['ret'] = pd.to_numeric(df[price_col], errors='coerce').pct_change()
+                rf_daily = (1 + 0.05) ** (1 / 252) - 1
                 prices = []
                 for _, row in df.iterrows():
                     d = pd.to_datetime(row['time']).date()
                     val = getattr(row, 'value', getattr(row, 'volume', 0) * getattr(row, 'close', 0))
+                    ret = row['ret'] if pd.notna(row['ret']) else None
+                    shares = row.get('shares_outstanding')
+                    market_cap = row.get('market_cap')
+                    if pd.isna(shares):
+                        shares = None
+                    if pd.isna(market_cap) and shares is not None:
+                        market_cap = row['close'] * shares
+                    if pd.isna(market_cap):
+                        market_cap = None
                     prices.append(PriceDaily(
                         date=d,
                         ticker=ticker,
@@ -60,16 +87,15 @@ def run():
                         high=row['high'],
                         low=row['low'],
                         close=row['close'],
-                        adj_close=row['close'],
+                        adj_close=row[price_col],
                         volume=row['volume'],
                         value=val,
-                        shares_outstanding=1000000000, 
-                        market_cap=row['close'] * 1000000000,
-                        ret=0.0,
-                        excess_ret=0.0
+                        shares_outstanding=shares,
+                        market_cap=market_cap,
+                        ret=ret,
+                        excess_ret=(ret - rf_daily) if ret is not None else None
                     ))
-                session.bulk_save_objects(prices)
-                session.commit()
+                upsert(prices)
                 print(f" ✅ Tải thành công {ticker}")
         except Exception as e:
             print(f" ❌ Lỗi tải {ticker}: {e}")
@@ -89,13 +115,21 @@ def run():
                     index_code="VN30",
                     close=row['close']
                 ))
-            session.bulk_save_objects(indices)
-            session.commit()
+            upsert(indices)
             print(" ✅ Tải thành công VN30 Index")
     except Exception as e:
         print(f" ❌ Lỗi tải Index: {e}")
 
+    # Use an explicit constant-rate assumption until a historical RF source is configured.
+    rf_annual = 0.05
+    rf_daily = (1 + rf_annual) ** (1 / 252) - 1
+    rf_rows = [RiskFree(date=d.date(), rf_annual=rf_annual, rf_daily=rf_daily,
+                        source="assumed constant 5% annual")
+               for d in pd.date_range(start_date, end_date, freq='B')]
+    upsert(rf_rows)
+
     print("Hoàn tất thu thập dữ liệu! ✅")
+    print("Lưu ý: lợi suất dùng giá đóng cửa đã điều chỉnh nếu nguồn cung cấp; nếu không, dùng giá đóng cửa thường.")
     print("Vui lòng khởi động lại API Server (FastAPI) để dữ liệu mới cập nhật!")
 
 if __name__ == "__main__":

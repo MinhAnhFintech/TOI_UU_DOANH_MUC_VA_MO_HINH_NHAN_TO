@@ -5,22 +5,22 @@ import { usePortfolioWeights, useOptimizePortfolio } from '../api/queries';
 import DataTable from '../components/DataTable';
 import ChartCard from '../components/ChartCard';
 import ConfigPanel, { ConfigValues } from '../components/ConfigPanel';
-import { Spinner, JobProgress } from '../components/UI';
+import { Spinner, JobProgress, RequestError } from '../components/UI';
 import { useJob } from '../hooks/useJob';
 
 export default function WeightsPage() {
-  const { runId, setRunId } = useGlobalStore();
+  const { portfolioRunId, setPortfolioRunId } = useGlobalStore();
   const [jobId, setJobId] = useState<string | null>(null);
   const { progress, status, error, runId: newRunId, isDone } = useJob(jobId);
-  const { mutate, isPending } = useOptimizePortfolio();
+  const { mutate, isPending, error: submitError } = useOptimizePortfolio();
 
-  const { data, isLoading } = usePortfolioWeights(runId || 'default');
+  const { data, isLoading } = usePortfolioWeights(portfolioRunId || '');
 
   useEffect(() => {
-    if (isDone && newRunId && newRunId !== runId) {
-      setRunId(newRunId);
+    if (isDone && newRunId && newRunId !== portfolioRunId) {
+      setPortfolioRunId(newRunId);
     }
-  }, [isDone, newRunId, runId, setRunId]);
+  }, [isDone, newRunId, portfolioRunId, setPortfolioRunId]);
 
   const handleRun = (formData: ConfigValues) => {
     mutate({
@@ -38,9 +38,10 @@ export default function WeightsPage() {
 
   const columns = useMemo(() => [
     { header: 'Mã CP', accessorKey: 'ticker' },
+    { header: 'Ngành', accessorKey: 'sector' },
     { header: 'Tỷ trọng', accessorKey: 'weight', cell: (info: any) => `${((info.getValue() ?? 0) * 100).toFixed(2)}%` },
-    { header: 'Lợi suất Kỳ vọng', accessorKey: 'expected_return', cell: (info: any) => info.getValue() != null ? `${(info.getValue() * 100).toFixed(2)}%` : 'N/A' },
-    { header: 'Biến động', accessorKey: 'volatility', cell: (info: any) => info.getValue() != null ? `${(info.getValue() * 100).toFixed(2)}%` : 'N/A' },
+    { header: 'Lợi suất Kỳ vọng (Năm)', accessorKey: 'mu', cell: (info: any) => info.getValue() != null ? `${(info.getValue() * 100).toFixed(2)}%` : 'N/A' },
+    { header: 'Độ lệch chuẩn (Năm)', accessorKey: 'sigma', cell: (info: any) => info.getValue() != null ? `${(info.getValue() * 100).toFixed(2)}%` : 'N/A' },
   ], []);
 
   const chartOption = useMemo(() => {
@@ -59,6 +60,7 @@ export default function WeightsPage() {
     <div className="flex gap-6">
       <div className="flex-1 space-y-6">
         <JobProgress progress={progress} status={status} error={error} />
+        <RequestError error={submitError} />
         <div className="p-4 bg-blue-50 text-blue-800 rounded-lg text-sm mb-4 border border-blue-100">
           <strong>Lưu ý:</strong> Thuật toán Markowitz sẽ tự động loại bỏ các mã cổ phiếu không hiệu quả (gán tỷ trọng 0%). Để ép danh mục phải mua nhiều mã hơn nhằm phân tán rủi ro, hãy giảm <strong>Tỷ trọng tối đa / mã (w_max)</strong> ở bảng cấu hình bên phải rồi chạy lại thuật toán.
         </div>
@@ -79,7 +81,7 @@ export default function WeightsPage() {
         )}
       </div>
       <div className="w-80">
-        <ConfigPanel onSubmit={handleRun} isLoading={isPending || status === 'running'} />
+        <ConfigPanel onSubmit={handleRun} isLoading={isPending || status === 'pending' || status === 'running' || (!!jobId && !isDone && !error)} />
       </div>
     </div>
   );

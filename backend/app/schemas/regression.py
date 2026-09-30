@@ -1,14 +1,33 @@
-from pydantic import BaseModel
-from typing import List, Dict, Optional, Any
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from typing import List, Dict, Optional, Any, Literal
 from datetime import date
+from app.models.registry import get_model_factors
 
 class RegressionRunRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     models: List[str]
     tickers: Optional[List[str]] = None
-    freq: str
-    cov_type: str = 'HAC'
+    freq: Literal['daily'] = 'daily'
+    cov_type: Literal['HAC', 'HC0', 'HC1', 'HC2', 'HC3', 'nonrobust'] = 'HAC'
     start: date
     end: date
+
+    @field_validator('models')
+    @classmethod
+    def validate_models(cls, models: List[str]) -> List[str]:
+        if not models:
+            raise ValueError('Select at least one regression model.')
+        normalized = list(dict.fromkeys(model.upper() for model in models))
+        for model in normalized:
+            get_model_factors(model)
+        return normalized
+
+    @model_validator(mode='after')
+    def validate_date_range(self):
+        if self.start > self.end:
+            raise ValueError('Regression start date must not be after end date.')
+        return self
 
 class RegressionResult(BaseModel):
     ticker: str

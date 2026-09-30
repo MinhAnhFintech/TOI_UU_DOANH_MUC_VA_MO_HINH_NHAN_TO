@@ -1,156 +1,285 @@
-# 📈 Đề án: Tối Ưu Danh Mục & Mô Hình Nhân Tố Trên Thị Trường Việt Nam
+# VN30 Factor Optimizer
 
-*(Portfolio Optimization & Factor Models on VN30)*
+> **Tối ưu danh mục và mô hình nhân tố trên thị trường Việt Nam (VN30)**  
+> Portfolio Optimization & Factor Models on VN30
 
-Đề án này là một hệ thống **Định lượng Tài chính Toàn diện (Quantitative Finance System)**, được xây dựng dưới dạng một Web Application hoàn chỉnh. Hệ thống tự động hóa toàn bộ quy trình từ thu thập dữ liệu thô, xây dựng mô hình nhân tố, hồi quy kiểm định định giá tài sản, cho đến tối ưu hóa Markowitz và Backtest danh mục với dữ liệu thực tế tại thị trường chứng khoán Việt Nam (rổ VN30).
-
----
-
-## 📑 Mục lục
-
-1. [Câu hỏi nghiên cứu](#1-câu-hỏi-nghiên-cứu)
-2. [Tổng quan tài liệu](#2-tổng-quan-tài-liệu)
-3. [Xử lý dữ liệu &amp; Tính tái lập](#3-xử-lý-dữ-liệu--tính-tái-lập)
-4. [Phương pháp kỹ thuật &amp; Kiểm định giả định](#4-phương-pháp-kỹ-thuật--kiểm-định-giả-định)
-5. [Thuật toán Tối ưu hóa Markowitz](#5-thuật-toán-tối-ưu-hóa-markowitz)
-6. [Hàm ý Kinh tế - Tài chính](#6-hàm-ý-kinh-tế---tài-chính)
-7. [Hướng dẫn sử dụng hệ thống](#7-hướng-dẫn-sử-dụng-hệ-thống)
+Đề án nghiên cứu kiểm định CAPM, Fama-French 3 & 5 nhân tố, xây dựng đường biên hiệu quả Markowitz, và backtest cuốn chiếu có tính phí giao dịch trên rổ VN30.
 
 ---
 
-## 1. Câu hỏi nghiên cứu
+## 📋 Mục lục
 
-Dự án được xây dựng nhằm trả lời 3 câu hỏi cốt lõi mang tính học thuật và thực tiễn cao:
-
-- **Q1 (Pricing):** Các mô hình định giá tài sản kinh điển (CAPM, Fama-French 3 nhân tố, 5 nhân tố) có khả năng giải thích sự biến động tỷ suất sinh lợi của rổ cổ phiếu VN30 không?
-- **Q2 (Emerging Market Limits):** Việc bổ sung các giới hạn thực tế của thị trường cận biên như **Thanh khoản (LIQ)**, **Giao dịch khối ngoại (FOR)** và **Độ biến động (VOL)** có cải thiện sức mạnh của mô hình so với chuẩn quốc tế không?
-- **Q3 (Portfolio Management):** Danh mục tối ưu theo lý thuyết Markowitz có đánh bại được chỉ số VN30-Index (về Tỷ lệ Sharpe và Max Drawdown) khi áp dụng trong môi trường thực tế (có tính chi phí giao dịch, rebalance định kỳ) không?
-
----
-
-## 2. Tổng quan tài liệu
-
-Hệ thống được phát triển dựa trên nền tảng của các công trình đạt giải Nobel và các nghiên cứu uy tín:
-
-- **Harry Markowitz (1952) - *Journal of Finance*:** Nền tảng của Lý thuyết danh mục hiện đại (MPT), lượng hóa rủi ro bằng phương sai và tối ưu hóa hàm mục tiêu (Đường biên hiệu quả).
-- **Eugene Fama & Kenneth French (1993, 2015) - *Journal of Financial Economics*:** Sự ra đời của mô hình 3 nhân tố (MKT, SMB, HML) và 5 nhân tố (bổ sung RMW, CMA) nhằm giải quyết những dị thường (anomalies) mà CAPM không thể giải thích.
-- **Nghiên cứu về Thị trường mới nổi (Emerging Markets):** Các luận điểm cho thấy rào cản về thanh khoản (Illiquidity) và dòng vốn ngoại (Foreign Ownership) là những rủi ro hệ thống bắt buộc phải được định giá bù đắp (Premium).
+- [Yêu cầu hệ thống](#-yêu-cầu-hệ-thống)
+- [Cài đặt nhanh](#-cài-đặt-nhanh-5-phút)
+- [Chạy ứng dụng](#-chạy-ứng-dụng)
+- [Hướng dẫn sử dụng](#-hướng-dẫn-sử-dụng-từng-tab)
+- [Cấu trúc dự án](#-cấu-trúc-dự-án)
+- [Công nghệ sử dụng](#-công-nghệ-sử-dụng)
 
 ---
 
-## 3. Xử lý dữ liệu & Tính tái lập
+## 💻 Yêu cầu hệ thống
 
-Hệ thống đảm bảo tính nghiêm ngặt tuyệt đối về **Look-ahead Bias** (Thiên kiến nhìn trước) - sai lầm phổ biến nhất trong nghiên cứu tài chính:
-
-- **Nguồn dữ liệu:** Giá lịch sử (OHLCV) và BCTC được kéo tự động thông qua API `vnstock`.
-- **Đồng bộ chuỗi thời gian:** Xử lý mất mát dữ liệu (Missing Values) bằng `forward-fill` đối với các ngày giao dịch bị ngắt quãng, đảm bảo ma trận giá không bị thủng.
-- **Lag BCTC (Độ trễ):** Dữ liệu Book-to-Market (B/M), Lợi nhuận (ROE), Tổng tài sản không được dùng ngay tại ngày chốt sổ quý, mà được lùi lại (Lag) tương đương với **Report Date** (Ngày công bố BCTC ra công chúng) để đảm bảo tại thời điểm danh mục tái cơ cấu, nhà đầu tư thực sự đã biết thông tin đó.
-- **Tính toán TSSL:** Tính TSSL vượt trội (Excess Return) bằng cách lấy $R_i - R_f$ (Lãi suất trái phiếu chính phủ 1 năm hoặc tiền gửi quy đổi theo ngày).
-
----
-
-## 4. Phương pháp kỹ thuật & Kiểm định giả định
-
-### 4.1. Thuật toán Xây dựng Nhân tố (Fama-French 2x3 Sorts)
-
-- **Cơ chế:** Phân loại toàn bộ vũ trụ VN30 vào mỗi kỳ tái cơ cấu. Cắt đôi theo Quy mô (Trung vị Vốn hóa - Size Median). Cắt ba theo B/M (Phân vị 30% và 70%).
-- **Trọng số:** Tính lợi suất danh mục theo phương pháp *Value-Weighted* (Trọng số vốn hóa).
-- **Mở rộng (Điểm sáng tạo):** Xây dựng thêm nhân tố **LIQ** (Thanh khoản thấp trừ Thanh khoản cao), **FOR** (Khối ngoại mua trừ Khối ngoại bán), **VOL** (Biến động cao trừ thấp).
-
-### 4.2. Hồi quy và Kiểm định
-
-- **OLS với Newey-West (HAC):** Khắc phục triệt để vi phạm giả định của OLS cổ điển về *Tự tương quan (Autocorrelation)* và *Phương sai sai số thay đổi (Heteroskedasticity)*.
-- **GRS Test (Gibbons-Ross-Shanken):** Thay vì chỉ đánh giá Adjusted $R^2$, hệ thống dùng GRS Test để kiểm định đồng thời ma trận $Alpha$ của toàn bộ các phương trình. Nếu GRS Test thất bại (p-value < 0.05), mô hình không giải thích được toàn bộ rủi ro.
-- **Hồi quy phân vị (Quantile Regression):** Cung cấp góc nhìn phi tuyến tính. Ở các đuôi phân phối cực đoan (khi thị trường sập hoặc bùng nổ mạnh), Beta của các nhân tố biến đổi như thế nào.
+| Yêu cầu | Phiên bản |
+|----------|-----------|
+| **Python** | >= 3.10 |
+| **Node.js** | >= 18.0 |
+| **npm** | >= 9.0 |
+| **PostgreSQL** | Database Supabase (đã cấu hình sẵn) |
 
 ---
 
-## 5. Thuật toán Tối ưu hóa Markowitz
+## 🚀 Cài đặt nhanh (5 phút)
 
-Hệ thống cung cấp thuật toán tối ưu với các ràng buộc khắt khe nhất của thị trường chứng khoán Việt Nam:
+### Bước 1: Clone/Tải về dự án
 
-1. **Thuật toán:** Dùng `scipy.optimize` với bộ giải `SLSQP` (Sequential Least SQuares Programming). Hàm mục tiêu là Maximize Sharpe Ratio hoặc Minimize Variance.
-2. **Ràng buộc:**
-   - Cấm bán khống (No Short-selling): $w_i \ge 0$.
-   - Giới hạn Tỷ trọng (`w_max`): Ràng buộc chặn trên ($w_i \le w_{max}$ ví dụ 15%). Nếu không có ràng buộc này, thuật toán Markowitz thường mắc "lỗi nhạy cảm", dồn 100% tiền vào 1-2 mã có tỷ suất sinh lời quá khứ cao.
-3. **Ước lượng rủi ro (Covariance Estimator):** Ngoài Sample Covariance cơ bản, hệ thống hỗ trợ thuật toán **Ledoit-Wolf Shrinkage**. Thuật toán này giúp khử nhiễu (noise) của ma trận hiệp phương sai mẫu, đặc biệt quan trọng khi tập mẫu ($T$) không đủ lớn so với số lượng tài sản ($N$).
-4. **Cơ chế Backtest:** Chạy cuốn chiếu (Rolling Window). Huấn luyện trên $N$ tháng quá khứ $\rightarrow$ Cố định tỷ trọng $\rightarrow$ Chạy test thực tế $\rightarrow$ Trừ phí giao dịch (Transaction Costs) dựa trên độ lệch tỷ trọng (Turnover) mỗi kỳ Rebalance.
-
----
-
-## 6. Hàm ý Kinh tế - Tài chính
-
-Sản phẩm này mang lại giá trị thực tiễn sâu sắc cho các Quỹ đầu tư, Ngân hàng đầu tư (IB) và Chuyên viên phân tích (Quant Analyst):
-
-- **Bác bỏ niềm tin mù quáng vào VN30:** Bằng Backtest thực tế, hệ thống chứng minh danh mục Markowitz (khi được tối ưu đúng cách bằng Ledoit-Wolf và có chặn `w_max`) hoàn toàn có thể đạt Tỷ lệ Sharpe cao hơn, và Max Drawdown thấp hơn VN30-Index, bảo vệ NAV của Quỹ trong các đợt thị trường gấu (Bear market).
-- **Nhận diện tính đặc thù của Việt Nam:** Kết quả cho thấy FF3 thường có Adjusted $R^2$ tốt hơn FF5. Điều này hàm ý tại VN, dòng tiền chuộng các yếu tố truyền thống (Giá trị & Quy mô) hơn là các chỉ số nền tảng (Lợi nhuận - RMW, Đầu tư - CMA).
-- **Quyền lực của Khối ngoại & Thanh khoản:** Việc các mô hình mở rộng (FF5_ALL, FF5_FOR) thay đổi thứ hạng định giá chứng tỏ thanh khoản và dòng vốn FII đóng vai trò rủi ro cốt lõi. Khối quản trị rủi ro tại ngân hàng có thể dùng các Beta này để hedging (phòng ngừa rủi ro) khi khối ngoại xả hàng loạt.
-
----
-
-## 7. Hướng dẫn sử dụng hệ thống
-
-Hệ thống được thiết kế dạng Dashboard (React JS + Vite) kết nối API Backend (FastAPI).
-
-### Khởi động (Dành cho nhà phát triển):
-
-1. **Backend:** Bật môi trường Python, chạy `python -m uvicorn app.main:app --reload --port 8000`
-2. **Frontend:** Mở thư mục frontend, chạy `npm run dev` (Port 5173).
-
-### Luồng nghiệp vụ trên UI (Pipeline):
-
-Để có kết quả, người dùng **phải chạy theo đúng tuần tự** sau (do output của tab trước là input của tab sau):
-
-1. **Tab Dữ liệu & Nhân tố:** Xem biểu đồ dữ liệu OHLCV, tương quan nhân tố (Correlation Matrix) để rà soát hiện tượng đa cộng tuyến.
-2. **Tab Hồi quy (Time-series Regression):**
-   - Chỉnh các thông số Ngày Train, chọn Mô hình (chỉ mang tính chất xem trước).
-   - Bấm **Chạy thuật toán**. Hệ thống sẽ chạy đồng loạt 7 mô hình.
-3. **Tab Kết luận (Ranking):** Xem hệ thống tự động chấm điểm và xếp hạng mô hình định giá tốt nhất dựa trên Adjusted $R^2$.
-4. **Tab Tỷ trọng & Đường biên:**
-   - Kéo thanh `w_max` để giới hạn tỷ trọng giải ngân tối đa cho 1 cổ phiếu.
-   - Bấm **Chạy thuật toán**. Hệ thống tính toán đường biên Markowitz, tìm điểm tiếp tuyến Sharpe cao nhất và vẽ biểu đồ hình đạn (Bullet/Scatter).
-5. **Tab Backtest:**
-   - Đặt kỳ Rebalance (Hàng tháng / Hàng quý), phí mua bán (Gợi ý: 0.15% - 0.25%).
-   - Bấm **Chạy thuật toán**. Hệ thống vẽ đường Equity Curve (Tăng trưởng NAV) so sánh giữa Danh mục tối ưu, Danh mục chia đều (Equal-weight) và VN30-Index, kèm theo bảng rủi ro Max Drawdown.
-
----
-
-
-## 8. Hướng dẫn Chạy Thực Tế & Xử lý Lỗi (Troubleshooting)
-
-### Bước 1: Khởi tạo Database (Supabase)
-Bạn cần có một dự án trên Supabase. Copy file `.env.example` trong thư mục `backend` thành `.env` và điền chuỗi kết nối Session Mode:
-```env
-DATABASE_URL=postgresql+asyncpg://postgres:[YOUR-PASSWORD]@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres
+```bash
+# Giải nén hoặc clone dự án vào thư mục
+cd Mo_hình
 ```
 
-### Bước 2: Thu thập Dữ liệu (Backend)
-Mở Terminal 1 (Backend), tạo và bật `.venv`, sau đó chạy:
-```powershell
-pip install -r pyproject.toml
-python -m pip install -U --extra-index-url https://vnstocks.com/api/simple "vnstock>=4.0.9" "vnai>=2.6.2"
-pip install greenlet asyncpg psycopg2-binary pandas statsmodels numpy scipy scikit-learn
+### Bước 2: Cài đặt Backend (Python)
 
-alembic upgrade head
+```bash
+# Tạo virtual environment (chỉ lần đầu)
+python -m venv .venv
 
-python collect_real_data.py
-python fix_returns.py
-python build_real_factors.py
+# Kích hoạt virtual environment
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+# Windows CMD:
+.\.venv\Scripts\activate.bat
+# macOS/Linux:
+source .venv/bin/activate
 
+# Cài đặt thư viện Python
+cd backend
+pip install -r requirements.txt
+```
+
+Nếu chưa có file `requirements.txt`, cài trực tiếp:
+
+```bash
+pip install fastapi uvicorn[standard] sqlalchemy[asyncio] asyncpg pydantic pydantic-settings pandas numpy scipy statsmodels scikit-learn openpyxl python-dotenv alembic loguru
+```
+
+### Bước 3: Cấu hình Database
+
+Tạo file `backend/.env` (hoặc sửa file có sẵn):
+
+```env
+DATABASE_URL=postgresql+asyncpg://USER:PASS@HOST:PORT/DBNAME
+DATA_START=2021-01-01
+DATA_END=2025-12-31
+TRAIN_END=2024-12-31
+RF_SOURCE=gov_bond_1y
+SEED=42
+API_HOST=0.0.0.0
+API_PORT=8000
+```
+
+> ⚠️ **Thay `USER`, `PASS`, `HOST`, `PORT`, `DBNAME`** bằng thông tin Supabase thực. File `.env` đã có sẵn trong dự án.
+
+### Bước 4: Cài đặt Frontend (React)
+
+```bash
+cd frontend
+npm install
+```
+
+---
+
+## ▶️ Chạy ứng dụng
+
+### Mở 2 terminal riêng biệt:
+
+**Terminal 1 — Backend API (Python):**
+
+```bash
+cd backend
+# Kích hoạt venv nếu chưa
+.\.venv\Scripts\Activate.ps1
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-### 🛠 Các Lỗi Thường Gặp (Khi chạy trên máy khác)
+Khi thấy dòng `Uvicorn running on http://0.0.0.0:8000` là backend đã sẵn sàng.
 
-1. **Lỗi `relation "price_daily" does not exist`**
-   - **Khắc phục:** Database trống, chưa chạy Migrate. Chạy lệnh `alembic upgrade head` ở thư mục `backend`.
-2. **Lỗi `ECONNREFUSED /api/v1/...` trên Terminal Frontend**
-   - **Khắc phục:** Backend chưa bật. Mở thêm 1 terminal bật `uvicorn` như hướng dẫn trên.
-3. **Lỗi `schema "np" does not exist` khi chạy `build_real_factors.py`**
-   - **Khắc phục:** psycopg2 không hiểu kiểu số thực của Numpy. Đảm bảo ép kiểu biến qua hàm `float(...)` trước khi lưu vào DB (Đã được vá trong code mới).
-4. **Lỗi treo màn hình khi chạy `fix_returns.py`**
-   - **Khắc phục:** Gửi hàng chục nghìn truy vấn `UPDATE` nhỏ lẻ qua mạng gây nghẽn. Hãy sử dụng Raw SQL Window Function để server tự tính toán siêu tốc (Đã vá).
-5. **Kết quả Hồi quy / Markowitz ra toàn số `0.00` hoặc `N/A`**
-   - **Khắc phục:** Giá thu thập về chưa được tính tỷ suất sinh lời. Chắc chắn bạn đã chạy file `python fix_returns.py`.
-6. **Đổi mô hình (CAPM/FF3/FF5) nhưng Đường biên hiệu quả không đổi**
-   - **Khắc phục:** Code cũ dùng Mean lịch sử cố định. Code mới đã được cập nhật logic lấy đúng hệ số Beta từ hồi quy OLS tương ứng của từng mô hình để dự phóng tỷ suất kỳ vọng, kết hợp bộ ước lượng Covariance động.
+**Terminal 2 — Frontend (React):**
+
+```bash
+cd frontend
+npm run dev
+```
+
+Khi thấy dòng `Local: http://localhost:5173/` → mở trình duyệt tại địa chỉ đó.
+
+### Kiểm tra nhanh:
+
+- Backend health: Mở `http://localhost:8000/api/v1/health` → phải thấy `{"data":{"status":"ok"}}`
+- Frontend: Mở `http://localhost:5173/` → thấy giao diện VN30 Optimizer
+
+---
+
+## 📖 Hướng dẫn sử dụng từng Tab
+
+### Tab 1: 📊 Chất lượng Dữ liệu
+Xem tổng quan dữ liệu VN30: số mã, phạm vi ngày, tỷ lệ missing, biểu đồ giá chuẩn hóa.
+
+### Tab 2: 📈 Phân tích Nhân tố
+- **Biểu đồ Lợi suất Tích lũy:** Xem hiệu suất tích lũy của 8 nhân tố (MKT, SMB, HML, RMW, CMA, LIQ, FOR, VOL).
+- **Bảng Thống kê mô tả:** Mean, Std, t-stat cho mỗi nhân tố (Newey-West).
+- **Ma trận Tương quan:** Kiểm tra đa cộng tuyến giữa các nhân tố.
+
+### Tab 3: 📐 Hồi quy Chuỗi thời gian
+1. Chọn mô hình ở **Bảng Cấu Hình** bên phải (CAPM, FF3, FF5, FF5_ALL,...).
+2. Bấm **"Chạy thuật toán"** → chờ thanh tiến trình hoàn thành.
+3. Xem bảng kết quả: Alpha, Beta cho từng cổ phiếu, Adj R², t-stat.
+4. Chuyển qua lại giữa các mô hình bằng dropdown phía trên bảng.
+
+### Tab 4: ⚖️ So sánh Mô hình
+- Bảng so sánh tất cả mô hình: Avg Adj R², GRS, mean|α|.
+- Kết quả GRS test cho từng mô hình.
+- Giả thuyết H1–H5: FF3>CAPM? FF5>FF3? LIQ/FOR/VOL có ý nghĩa?
+
+### Tab 5: 📉 Hồi quy Phân vị
+- Chọn **mã cổ phiếu** và **nhân tố** từ dropdown.
+- Biểu đồ cho thấy hệ số thay đổi theo phân vị (tau 0.1→0.9).
+- Đường liền = hệ số, đường đứt nét đỏ = khoảng tin cậy 95%.
+
+### Tab 6: 🎯 Đường biên Hiệu quả
+1. Chọn **mô hình** và **estimator** (Ledoit-Wolf khuyến nghị).
+2. Điều chỉnh **w_max** (tỷ trọng tối đa/mã, mặc định 15%).
+3. Bấm **"Chạy thuật toán"** → xem biểu đồ:
+   - Đám mây xanh = 3000 danh mục ngẫu nhiên
+   - Đường vàng = đường biên hiệu quả
+   - ⭐ Sao đỏ = danh mục Tiếp tuyến (Max Sharpe)
+
+> **💡 Mẹo:** Giảm w_max xuống 5-10% để buộc danh mục phải phân tán vào nhiều mã hơn.
+
+### Tab 7: 📊 Tỷ trọng Danh mục
+- Biểu đồ thanh ngang hiển thị tỷ trọng từng mã.
+- Bảng chi tiết: tỷ trọng, lợi suất kỳ vọng, độ lệch chuẩn.
+- **Lưu ý:** Markowitz tự động gán 0% cho các mã không hiệu quả. Đây là hành vi đúng, không phải lỗi.
+
+### Tab 8: 🧪 Kiểm định Backtest
+1. Bấm **"Chạy thuật toán"** ở bảng cấu hình.
+2. Xem 4 sub-tab:
+   - **Equity Curve:** NAV tích lũy 3 danh mục (VN30, Equal Weight, Proposed)
+   - **Drawdown:** Độ sụt giảm từ đỉnh
+   - **Rolling Sharpe:** Sharpe 60 ngày cuốn chiếu
+   - **Metrics:** CAGR, Sharpe, Sortino, MaxDD, Calmar, Turnover
+
+### Tab 9: 🔍 Phân tích Độ nhạy
+*(Đang phát triển)* — Phân tích ảnh hưởng của thay đổi tham số đến kết quả.
+
+### Tab 10: 📝 Kết Luận
+- Tóm tắt 4 câu hỏi nghiên cứu chính (RQ1–RQ4).
+- Bảng so sánh hiệu suất danh mục vs benchmarks.
+- Phát hiện chính và giới hạn nghiên cứu.
+- Tự động cập nhật theo dữ liệu đã chạy.
+
+---
+
+## 📁 Cấu trúc dự án
+
+```
+Mo_hình/
+├── backend/                  # Backend Python (FastAPI)
+│   ├── app/
+│   │   ├── api/              # API endpoints (REST)
+│   │   │   ├── backtest.py   # POST /backtest/run, GET /backtest/equity,...
+│   │   │   ├── factors.py    # GET /factors, /factors/stats,...
+│   │   │   ├── portfolio.py  # POST /portfolio/optimize, GET /portfolio/weights,...
+│   │   │   └── regression.py # POST /regression/run, GET /regression/results,...
+│   │   ├── backtest/         # Logic backtest
+│   │   │   ├── engine.py     # NAV calculation với phí giao dịch
+│   │   │   ├── benchmarks.py # VN30 Index & Equal Weight benchmarks
+│   │   │   └── metrics.py    # CAGR, Sharpe, Sortino, MaxDD, Calmar
+│   │   ├── factors/          # Xây dựng nhân tố Fama-French
+│   │   │   ├── sorts_2x3.py  # SMB, HML, RMW, CMA (2×3 sorts)
+│   │   │   ├── liq.py        # Nhân tố Thanh khoản (Amihud)
+│   │   │   ├── vol.py        # Nhân tố Biến động
+│   │   │   └── foreign.py    # Nhân tố Khối ngoại
+│   │   ├── models/           # Mô hình tài chính
+│   │   │   ├── regression.py # OLS + Newey-West HAC
+│   │   │   ├── grs.py        # Gibbons-Ross-Shanken test
+│   │   │   └── selection.py  # Chọn mô hình tốt nhất + H1-H5
+│   │   ├── optimize/         # Tối ưu danh mục
+│   │   │   ├── markowitz.py  # Max Sharpe & Min Variance
+│   │   │   ├── frontier.py   # Đường biên hiệu quả + CML
+│   │   │   └── covariance.py # Ledoit-Wolf shrinkage
+│   │   └── core/             # Config, database, logging
+│   └── .env                  # Database connection string
+│
+├── frontend/                 # Frontend React (TypeScript + Vite)
+│   ├── src/
+│   │   ├── pages/            # 10 trang ứng dụng
+│   │   ├── components/       # UI components tái sử dụng
+│   │   ├── api/              # API client + TanStack Query hooks
+│   │   └── hooks/            # Zustand global store
+│   └── package.json
+│
+└── README.md                 # File này
+```
+
+---
+
+## 🔧 Công nghệ sử dụng
+
+### Backend
+| Thư viện | Vai trò |
+|----------|---------|
+| FastAPI | REST API framework |
+| SQLAlchemy 2.0 | ORM + async database |
+| PostgreSQL (Supabase) | Lưu trữ dữ liệu |
+| statsmodels | Hồi quy OLS + Newey-West HAC |
+| scipy.optimize | Markowitz optimization (SLSQP) |
+| scikit-learn | Ledoit-Wolf covariance shrinkage |
+| pandas / numpy | Xử lý dữ liệu |
+
+### Frontend
+| Thư viện | Vai trò |
+|----------|---------|
+| React 18 + TypeScript | UI framework |
+| Vite | Build tool |
+| TailwindCSS | Styling |
+| ECharts | Biểu đồ tương tác |
+| TanStack Query | Data fetching + caching |
+| TanStack Table | Bảng dữ liệu |
+| Zustand | Global state management |
+
+### Tham số mặc định
+
+| Tham số | Giá trị | Ghi chú |
+|---------|---------|---------|
+| Universe | VN30 (30 mã) | Rổ cuối cùng |
+| Train | 2021-01 → 2024-12 | 4 năm |
+| Test | 2025-01 → 2025-12 | 1 năm |
+| Risk-free | TPCP 1 năm | Quy đổi: (1+r)^(1/252)-1 |
+| w_max | 15% | Long-only, Σw=1 |
+| Phí mua | 0.15% | |
+| Phí bán | 0.25% | Gồm thuế 0.1% |
+| HAC lag | 5 | Newey-West |
+| Covariance | Ledoit-Wolf | Shrinkage estimator |
+
+---
+
+## ❓ Xử lý sự cố
+
+| Vấn đề | Giải pháp |
+|--------|-----------|
+| `ModuleNotFoundError` | Kiểm tra đã kích hoạt `.venv` chưa: `.\.venv\Scripts\Activate.ps1` |
+| Backend lỗi kết nối DB | Kiểm tra `DATABASE_URL` trong `backend/.env` |
+| Frontend trắng trang | Mở DevTools (F12) → Console xem lỗi |
+| Thuật toán chạy chậm | Hồi quy ~30 giây cho 7 mô hình × 30 mã. Đường biên ~10-15 giây |
+| Dữ liệu biến mất khi chuyển tab | Đã fix! Dữ liệu được lưu trong localStorage |
+| Biểu đồ không đổi khi chọn model | Phải bấm "Chạy thuật toán" để tính lại với model mới |
+
+---
+
+## 📚 Tài liệu tham khảo
+
+- Markowitz, H. (1952). *Portfolio Selection.* Journal of Finance.
+- Fama, E.F. & French, K.R. (1993). *Common risk factors in the returns on stocks and bonds.* JFE.
+- Fama, E.F. & French, K.R. (2015). *A five-factor asset pricing model.* JFE.
+- Gibbons, M.R., Ross, S.A., & Shanken, J. (1989). *A test of the efficiency of a given portfolio.* Econometrica.

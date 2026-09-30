@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.stats import binomtest
 
 
 def select_best_model(
@@ -22,38 +23,58 @@ def select_best_model(
     Returns:
         Dict with best_model name, criteria breakdown, and full ranking
     """
+    # Normalize keys to uppercase
+    regression_results = {k.upper(): v for k, v in regression_results.items()}
+    grs_results = {k.upper(): v for k, v in grs_results.items()}
+    
     ranking = []
     
     for model_name, results_list in regression_results.items():
         if not results_list:
             continue
-        
-        avg_adj_r2 = np.mean([r['adj_r2'] for r in results_list if r.get('adj_r2') is not None])
-        avg_aic = np.mean([r['aic'] for r in results_list if r.get('aic') is not None])
-        avg_bic = np.mean([r['bic'] for r in results_list if r.get('bic') is not None])
-        mean_abs_alpha = np.mean([abs(r['alpha']) for r in results_list if r.get('alpha') is not None])
+
+        def finite_values(key, transform=lambda value: value):
+            values = [transform(row[key]) for row in results_list if row.get(key) is not None]
+            return [float(value) for value in values if np.isfinite(value)]
+
+        adj_r2_values = finite_values('adj_r2')
+        if not adj_r2_values:
+            continue
+        aic_values = finite_values('aic')
+        bic_values = finite_values('bic')
+        alpha_values = finite_values('alpha', abs)
+        avg_adj_r2 = float(np.mean(adj_r2_values))
+        avg_aic = float(np.mean(aic_values)) if aic_values else None
+        avg_bic = float(np.mean(bic_values)) if bic_values else None
+        mean_abs_alpha = float(np.mean(alpha_values)) if alpha_values else None
         
         grs = grs_results.get(model_name, {})
-        grs_p = grs.get('p_value', 0)
-        grs_stat = grs.get('grs_stat', float('inf'))
+        grs_p = grs.get('p_value')
+        grs_stat = grs.get('grs_stat')
         
         # Composite score (higher is better)
         # Normalize each criterion to [0, 1] range later for ranking
         ranking.append({
             'model': model_name,
             'avg_adj_r2': float(avg_adj_r2),
-            'grs_stat': float(grs_stat),
-            'grs_p': float(grs_p),
-            'avg_aic': float(avg_aic),
-            'avg_bic': float(avg_bic),
-            'mean_abs_alpha': float(mean_abs_alpha)
+            'grs_stat': float(grs_stat) if grs_stat is not None and np.isfinite(grs_stat) else None,
+            'grs_p': float(grs_p) if grs_p is not None and np.isfinite(grs_p) else None,
+            'avg_aic': avg_aic,
+            'avg_bic': avg_bic,
+            'mean_abs_alpha': mean_abs_alpha
         })
     
     if not ranking:
         return {'best_model': None, 'criteria': {}, 'ranking': []}
     
-    # Sort by: adj_r2 desc, grs_p desc, aic asc, mean_abs_alpha asc
-    ranking.sort(key=lambda x: (-x['avg_adj_r2'], -x['grs_p'], x['avg_aic'], x['mean_abs_alpha']))
+    # Sort by: adjusted R² desc; when tied, prefer a valid higher GRS p-value,
+    # then lower AIC and lower absolute alpha.
+    ranking.sort(key=lambda x: (
+        -x['avg_adj_r2'],
+        -(x['grs_p'] if x['grs_p'] is not None else -1.0),
+        x['avg_aic'] if x['avg_aic'] is not None else float('inf'),
+        x['mean_abs_alpha'] if x['mean_abs_alpha'] is not None else float('inf'),
+    ))
     
     best = ranking[0]
     
@@ -84,7 +105,6 @@ def test_hypotheses(
     
     Methods:
     - Paired t-test on Adj R-squared differences
-    - F-test for nested models (Wald test)
     - Proportion of stocks with significant coefficient at 5%
     
     Args:
@@ -94,99 +114,119 @@ def test_hypotheses(
     Returns:
         List of hypothesis result dicts
     """
+    # Normalize keys to uppercase
+    regression_results = {k.upper(): v for k, v in regression_results.items()}
+    grs_results = {k.upper(): v for k, v in grs_results.items()}
+    
     hypotheses = []
     
-    # Helper: get adj_r2 by ticker for a model
-    def get_adj_r2_by_ticker(model_name):
-        if model_name not in regression_results:
-            return {}
-        return {r['ticker']: r['adj_r2'] for r in regression_results[model_name] if 'ticker' in r}
+    # Pair models only when each ticker was estimated on the exact same dates.
+    def paired_adj_r2_test(model_a, model_b):
+        by_ticker_a = {
+            row['ticker']: row for row in regression_results.get(model_a, [])
+            if row.get('ticker') and row.get('adj_r2') is not None
+        }
+        by_ticker_b = {
+            row['ticker']: row for row in regression_results.get(model_b, [])
+            if row.get('ticker') and row.get('adj_r2') is not None
+        }
+        differences = []
+        for ticker in by_ticker_a.keys() & by_ticker_b.keys():
+            left, right = by_ticker_a[ticker], by_ticker_b[ticker]
+            sample_a, sample_b = left.get('_sample_dates'), right.get('_sample_dates')
+            if not sample_a or sample_a != sample_b:
+                continue
+            difference = float(right['adj_r2']) - float(left['adj_r2'])
+            if np.isfinite(difference):
+                differences.append(difference)
+        if len(differences) < 2:
+            return None
+        delta = float(np.mean(differences))
+        if np.allclose(differences, 0):
+            return 0.0, 1.0, delta
+        test = stats.ttest_1samp(differences, 0)
+        if not np.isfinite(test.statistic) or not np.isfinite(test.pvalue):
+            return None
+        return float(test.statistic), float(test.pvalue), delta
     
     def get_coef_significance(model_name, coef_name):
         """Get proportion of stocks where coefficient is significant at 5%."""
         if model_name not in regression_results:
             return 0, 0, 0
         results = regression_results[model_name]
-        total = len(results)
         p_key = f'{coef_name}_p' if f'{coef_name}_p' in (results[0] if results else {}) else None
-        if p_key is None:
-            # Try nested structure
-            sig_count = sum(1 for r in results 
-                          if r.get('p_values', {}).get(coef_name, 1) < 0.05)
-        else:
-            sig_count = sum(1 for r in results if r.get(p_key, 1) < 0.05)
+        values = []
+        for row in results:
+            value = row.get(p_key) if p_key else row.get('p_values', {}).get(coef_name)
+            if value is not None and np.isfinite(value):
+                values.append(float(value))
+        total = len(values)
+        sig_count = sum(value < 0.05 for value in values)
         return sig_count, total, sig_count / total if total > 0 else 0
     
     # H1: FF3 > CAPM
-    r2_capm = get_adj_r2_by_ticker('capm')
-    r2_ff3 = get_adj_r2_by_ticker('ff3')
-    common = set(r2_capm.keys()) & set(r2_ff3.keys())
-    if common:
-        diffs = [r2_ff3[t] - r2_capm[t] for t in common]
-        t_stat, p_val = stats.ttest_1samp(diffs, 0)
-        delta = np.mean(diffs)
+    paired = paired_adj_r2_test('CAPM', 'FF3')
+    if paired:
+        t_stat, p_val, delta = paired
         hypotheses.append({
             'id': 'H1',
             'statement': 'FF3 is better than CAPM',
             'statistic': float(t_stat),
             'p_value': float(p_val),
-            'verdict': 'Accept' if p_val < 0.05 and delta > 0 else 'Reject',
+            'verdict': 'Supported' if p_val < 0.05 and delta > 0 else 'Not supported',
             'note': f'Mean ΔAdj R² = {delta:.4f}'
         })
     
     # H2: FF5 > FF3
-    r2_ff5 = get_adj_r2_by_ticker('ff5')
-    common = set(r2_ff3.keys()) & set(r2_ff5.keys())
-    if common:
-        diffs = [r2_ff5[t] - r2_ff3[t] for t in common]
-        t_stat, p_val = stats.ttest_1samp(diffs, 0)
-        delta = np.mean(diffs)
+    paired = paired_adj_r2_test('FF3', 'FF5')
+    if paired:
+        t_stat, p_val, delta = paired
         hypotheses.append({
             'id': 'H2',
             'statement': 'FF5 is better than FF3',
             'statistic': float(t_stat),
             'p_value': float(p_val),
-            'verdict': 'Accept' if p_val < 0.05 and delta > 0 else 'Reject',
+            'verdict': 'Supported' if p_val < 0.05 and delta > 0 else 'Not supported',
             'note': f'Mean ΔAdj R² = {delta:.4f}'
         })
     
     # H3: LIQ is significant
-    sig, total, pct = get_coef_significance('ff5_liq', 'beta_liq')
-    hypotheses.append({
-        'id': 'H3',
-        'statement': 'LIQ factor is statistically significant',
-        'statistic': float(pct),
-        'p_value': float(1 - pct),  # Proportion as proxy
-        'verdict': 'Accept' if pct > 0.5 else 'Reject',
-        'note': f'{sig}/{total} stocks ({pct:.1%}) have significant LIQ at 5%'
-    })
+    sig, total, pct = get_coef_significance('FF5_LIQ', 'beta_liq')
+    if total > 0:
+        p_val_h3 = float(binomtest(sig, total, 0.05, alternative='greater').pvalue)
+        hypotheses.append({
+            'id': 'H3',
+            'statement': 'LIQ factor is statistically significant',
+            'statistic': float(pct),
+            'p_value': p_val_h3,
+            'verdict': 'Supported' if p_val_h3 < 0.05 else 'Not supported',
+            'note': f'{sig}/{total} stocks ({pct:.1%}) have significant LIQ at 5%'
+        })
     
-    # H4: FOR is significant
-    sig, total, pct = get_coef_significance('ff5_liq_for', 'beta_for')
-    hypotheses.append({
-        'id': 'H4',
-        'statement': 'FOR factor is statistically significant',
-        'statistic': float(pct),
-        'p_value': float(1 - pct),
-        'verdict': 'Accept' if pct > 0.5 else 'Reject',
-        'note': f'{sig}/{total} stocks ({pct:.1%}) have significant FOR at 5%'
-    })
+    # H4: FOR is significant (using FF5_ALL which includes for_)
+    sig, total, pct = get_coef_significance('FF5_FOR', 'beta_for')
+    if total > 0:
+        p_val_h4 = float(binomtest(sig, total, 0.05, alternative='greater').pvalue)
+        hypotheses.append({
+            'id': 'H4',
+            'statement': 'FOR factor is statistically significant',
+            'statistic': float(pct),
+            'p_value': p_val_h4,
+            'verdict': 'Supported' if p_val_h4 < 0.05 else 'Not supported',
+            'note': f'{sig}/{total} stocks ({pct:.1%}) have significant FOR at 5%'
+        })
     
-    # H5: VOL improves Adj R-squared
-    r2_without = get_adj_r2_by_ticker('ff5_liq_for')
-    r2_with = get_adj_r2_by_ticker('ff5_liq_for_vol')
-    common = set(r2_without.keys()) & set(r2_with.keys())
-    if common:
-        diffs = [r2_with[t] - r2_without[t] for t in common]
-        t_stat, p_val = stats.ttest_1samp(diffs, 0)
-        delta = np.mean(diffs)
+    # H5: Isolate the VOL effect by comparing FF5_VOL with the base FF5 model.
+    paired = paired_adj_r2_test('FF5', 'FF5_VOL')
+    if paired:
+        t_stat, p_val, delta = paired
         hypotheses.append({
             'id': 'H5',
-            'statement': 'VOL factor improves Adj R-squared',
+            'statement': 'VOL improves Adj R-squared over FF5',
             'statistic': float(t_stat),
             'p_value': float(p_val),
-            'verdict': 'Accept' if p_val < 0.05 and delta > 0 else 'Reject',
-            'note': f'Mean ΔAdj R² = {delta:.4f}'
+            'verdict': 'Supported' if p_val < 0.05 and delta > 0 else 'Not supported',
+            'note': f'Mean ΔAdj R² = {delta:.4f} (FF5_VOL vs FF5)'
         })
     
     return hypotheses

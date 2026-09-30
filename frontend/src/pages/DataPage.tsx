@@ -43,7 +43,11 @@ export default function DataPage() {
           <div className="text-sm text-slate-500">Số mã CP VN30</div>
         </div>
         <div className="bg-white p-4 rounded-lg shadow-sm text-center">
-          <div className="text-2xl font-bold text-navy-900">2020 - 2026</div>
+          <div className="text-2xl font-bold text-navy-900">
+            {pricesData?.data?.length
+              ? `${pricesData.data[0].date} – ${pricesData.data[pricesData.data.length - 1].date}`
+              : '—'}
+          </div>
           <div className="text-sm text-slate-500">Khoảng thời gian</div>
         </div>
         <div className="bg-white p-4 rounded-lg shadow-sm text-center">

@@ -3,6 +3,38 @@ import numpy as np
 from typing import Optional
 
 
+def _get_rebalance_dates(trading_dates: pd.DatetimeIndex, frequency_months: int) -> list[pd.Timestamp]:
+    if frequency_months < 1 or frequency_months > 12:
+        raise ValueError('rebalance_freq_months must be between 1 and 12.')
+    if trading_dates.empty:
+        return []
+
+    first_date, last_date = trading_dates.min(), trading_dates.max()
+    dates = []
+    if 12 % frequency_months == 0:
+        # Fama-French annual portfolios are formed at the end of June;
+        # shorter intervals retain June as the anchor (e.g. June/December).
+        months = [month for month in range(1, 13) if (month - 6) % frequency_months == 0]
+        for year in range(first_date.year, last_date.year + 1):
+            for month in months:
+                candidates = trading_dates[
+                    (trading_dates.year == year) & (trading_dates.month == month)
+                ]
+                if len(candidates):
+                    dates.append(candidates[-1])
+        return dates
+
+    current = first_date + pd.offsets.MonthEnd(0)
+    while current <= last_date:
+        candidates = trading_dates[
+            (trading_dates.year == current.year) & (trading_dates.month == current.month)
+        ]
+        if len(candidates):
+            dates.append(candidates[-1])
+        current += pd.DateOffset(months=frequency_months)
+    return dates
+
+
 def _get_latest_fundamental(
     fundamentals: pd.DataFrame,
     as_of_date: pd.Timestamp,
@@ -38,32 +70,31 @@ def _compute_portfolio_return(
     """Compute value-weighted or equal-weighted return for a portfolio of tickers on a date."""
     available_tickers = [t for t in tickers if t in returns.columns]
     if not available_tickers:
-        return 0.0
+        return np.nan
     
     rets = returns.loc[date, available_tickers] if date in returns.index else pd.Series(dtype=float)
     if rets.empty or rets.isna().all():
-        return 0.0
+        return np.nan
     
     if value_weighted:
         # Get market caps for weighting
         if date in market_caps.index:
-            caps = market_caps.loc[date, available_tickers]
-            caps = caps.dropna()
-            valid_tickers = caps.index.intersection(rets.dropna().index)
-            if len(valid_tickers) == 0:
-                return float(rets.dropna().mean()) if not rets.dropna().empty else 0.0
-            w = caps[valid_tickers] / caps[valid_tickers].sum()
-            return float((w * rets[valid_tickers]).sum())
+            valid_tickers = rets.dropna().index
+            caps = market_caps.loc[date, valid_tickers]
+            if caps.notna().all() and (caps > 0).all() and caps.sum() > 0:
+                w = caps / caps.sum()
+                return float((w * rets[valid_tickers]).sum())
+            return np.nan
         else:
-            return float(rets.dropna().mean()) if not rets.dropna().empty else 0.0
+            return np.nan
     else:
-        return float(rets.dropna().mean()) if not rets.dropna().empty else 0.0
+        return float(rets.dropna().mean()) if not rets.dropna().empty else np.nan
 
 
 def build_smb_hml(
     prices: pd.DataFrame,
     fundamentals: pd.DataFrame,
-    rebalance_freq_months: int = 6,
+    rebalance_freq_months: int = 12,
     value_weighted: bool = True
 ) -> pd.DataFrame:
     """Build SMB and HML using 2x3 sorts (Fama & French 1993).
@@ -86,7 +117,7 @@ def build_smb_hml(
     Args:
         prices: DataFrame with columns [date, ticker, ret, market_cap, close]
         fundamentals: DataFrame with columns [ticker, fiscal_year, quarter, report_date, book_equity]
-        rebalance_freq_months: Rebalance frequency in months (default 6)
+        rebalance_freq_months: Rebalance frequency in months (default 12; June formation)
         value_weighted: Use value-weighted returns (True) or equal-weighted (False)
     
     Returns:
@@ -98,19 +129,13 @@ def build_smb_hml(
     
     ret_wide = prices.pivot_table(index='date', columns='ticker', values='ret')
     cap_wide = prices.pivot_table(index='date', columns='ticker', values='market_cap')
+    cap_wide_lagged = cap_wide.shift(1)
     
     trading_dates = ret_wide.index.sort_values()
     
-    # Generate rebalance dates (end of June and December, or every N months)
-    rebalance_dates = []
-    current = trading_dates[0]
-    while current <= trading_dates[-1]:
-        # Find the last trading date in the rebalance month
-        month_end = current + pd.offsets.MonthEnd(0)
-        candidates = trading_dates[trading_dates <= month_end]
-        if len(candidates) > 0:
-            rebalance_dates.append(candidates[-1])
-        current = current + pd.DateOffset(months=rebalance_freq_months)
+    # Annual portfolios are formed at June month-end; alternate frequencies
+    # use the same June calendar anchor.
+    rebalance_dates = _get_rebalance_dates(trading_dates, rebalance_freq_months)
     
     # Build portfolio assignments at each rebalance date
     portfolio_assignments = {}  # date -> {ticker: portfolio_name}
@@ -182,8 +207,12 @@ def build_smb_hml(
             port_rets = {}
             for port_name, tickers in portfolios.items():
                 port_rets[port_name] = _compute_portfolio_return(
-                    ret_wide, cap_wide, tickers, date, value_weighted
+                    ret_wide, cap_wide_lagged, tickers, date, value_weighted
                 )
+
+            if not np.isfinite(list(port_rets.values())).all():
+                results.append({'date': date, 'smb': np.nan, 'hml': np.nan})
+                continue
             
             # SMB = 1/3(SL + SM + SH) - 1/3(BL + BM + BH)
             smb = (1/3) * (port_rets['SL'] + port_rets['SM'] + port_rets['SH']) \
@@ -204,7 +233,7 @@ def build_smb_hml(
 def build_rmw_cma(
     prices: pd.DataFrame,
     fundamentals: pd.DataFrame,
-    rebalance_freq_months: int = 6,
+    rebalance_freq_months: int = 12,
     value_weighted: bool = True
 ) -> pd.DataFrame:
     """Build RMW and CMA using 2x3 sorts (Fama & French 2015).
@@ -229,6 +258,7 @@ def build_rmw_cma(
     
     ret_wide = prices.pivot_table(index='date', columns='ticker', values='ret')
     cap_wide = prices.pivot_table(index='date', columns='ticker', values='market_cap')
+    cap_wide_lagged = cap_wide.shift(1)
     
     trading_dates = ret_wide.index.sort_values()
     
@@ -239,14 +269,7 @@ def build_rmw_cma(
     fund['total_assets_lag'] = fund.groupby('ticker')['total_assets'].shift(4)  # YoY (4 quarters)
     fund['asset_growth'] = (fund['total_assets'] / fund['total_assets_lag']) - 1
     
-    rebalance_dates = []
-    current = trading_dates[0]
-    while current <= trading_dates[-1]:
-        month_end = current + pd.offsets.MonthEnd(0)
-        candidates = trading_dates[trading_dates <= month_end]
-        if len(candidates) > 0:
-            rebalance_dates.append(candidates[-1])
-        current = current + pd.DateOffset(months=rebalance_freq_months)
+    rebalance_dates = _get_rebalance_dates(trading_dates, rebalance_freq_months)
     
     results = []
     
@@ -319,13 +342,13 @@ def build_rmw_cma(
             # RMW = 1/2(SR + BR) - 1/2(SW + BW)
             rmw_r = {}
             for pn, tickers in rmw_ports.items():
-                rmw_r[pn] = _compute_portfolio_return(ret_wide, cap_wide, tickers, date, value_weighted)
+                rmw_r[pn] = _compute_portfolio_return(ret_wide, cap_wide_lagged, tickers, date, value_weighted)
             rmw = 0.5 * (rmw_r['SR'] + rmw_r['BR']) - 0.5 * (rmw_r['SW'] + rmw_r['BW'])
             
             # CMA = 1/2(SC + BC) - 1/2(SA + BA)
             cma_r = {}
             for pn, tickers in cma_ports.items():
-                cma_r[pn] = _compute_portfolio_return(ret_wide, cap_wide, tickers, date, value_weighted)
+                cma_r[pn] = _compute_portfolio_return(ret_wide, cap_wide_lagged, tickers, date, value_weighted)
             cma = 0.5 * (cma_r['SC'] + cma_r['BC']) - 0.5 * (cma_r['SA'] + cma_r['BA'])
             
             results.append({'date': date, 'rmw': rmw, 'cma': cma})

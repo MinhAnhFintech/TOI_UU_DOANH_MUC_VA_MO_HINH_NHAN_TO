@@ -34,6 +34,7 @@ export const useOptimizePortfolio = () => useMutation({ mutationFn: (data: T.Opt
 
 // Backtest
 export const useEquity = (runId: string) => useQuery({ queryKey: ['backtest', 'equity', runId], queryFn: () => apiClient.get<any, T.APIResponse<T.EquityResponse>>('/backtest/equity', { params: { run_id: runId } }), enabled: !!runId });
+export const useDrawdown = (runId: string) => useQuery({ queryKey: ['backtest', 'drawdown', runId], queryFn: () => apiClient.get<any, T.APIResponse<T.DrawdownResponse>>('/backtest/drawdown', { params: { run_id: runId } }), enabled: !!runId });
 export const useMetrics = (runId: string) => useQuery({ queryKey: ['backtest', 'metrics', runId], queryFn: () => apiClient.get<any, T.APIResponse<T.MetricsRecord[]>>('/backtest/metrics', { params: { run_id: runId } }), enabled: !!runId });
 export const useRunBacktest = () => useMutation({ mutationFn: (data: T.BacktestRequest) => apiClient.post<any, T.APIResponse<{ job_id: string }>>('/backtest/run', data) });
 

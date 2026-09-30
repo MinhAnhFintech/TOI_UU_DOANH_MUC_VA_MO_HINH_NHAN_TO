@@ -10,6 +10,6 @@ export function useJob(jobId: string | null) {
     error: data?.data?.error || error?.message || null,
     isLoading: status === 'pending' || status === 'running' || isLoading,
     isDone: status === 'done',
-    isFailed: status === 'failed',
+    isFailed: status === 'failed' || status === 'error',
   };
 }

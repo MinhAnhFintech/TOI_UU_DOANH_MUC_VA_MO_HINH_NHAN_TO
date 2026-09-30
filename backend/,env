@@ -1,0 +1,15 @@
+
+#
+DATABASE_URL=postgresql+asyncpg://postgres.hbiucsevvwljkaretiqf:AycvPsnuEBWSLGvj@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres
+
+
+
+
+DATA_START=2021-01-01
+DATA_END=2025-12-31
+TRAIN_END=2024-12-31
+RF_SOURCE=gov_bond_1y
+SEED=42
+API_HOST=0.0.0.0
+API_PORT=8000
+

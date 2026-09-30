@@ -32,9 +32,11 @@ def estimate_covariance(
         ndarray (N x N) covariance matrix
     """
     returns_clean = returns.dropna()
+    if returns_clean.shape[0] < 2 or returns_clean.shape[1] == 0:
+        raise ValueError("At least two complete observations and one asset are required")
     
     if method == 'sample':
-        cov = np.cov(returns_clean.values, rowvar=False)
+        cov = np.atleast_2d(np.cov(returns_clean.values, rowvar=False))
     
     elif method == 'ledoit_wolf':
         lw = LedoitWolf().fit(returns_clean.values)
@@ -43,12 +45,15 @@ def estimate_covariance(
     elif method == 'semi':
         # Semi-covariance: only use returns below rf_daily
         excess = returns_clean - rf_daily
-        downside = excess.copy()
+        downside = excess.values
         downside[downside > 0] = 0  # Zero out upside returns
-        cov = np.cov(downside.values, rowvar=False)
-    
+        T = downside.shape[0]
+        # Do not mean-center again, calculate strictly below target
+        cov = (1 / T) * (downside.T @ downside)
     else:
         raise ValueError(f"Unknown method: {method}. Use 'sample', 'ledoit_wolf', or 'semi'.")
+
+    cov = np.atleast_2d(np.asarray(cov, dtype=float))
     
     if annualize:
         cov = cov * trading_days

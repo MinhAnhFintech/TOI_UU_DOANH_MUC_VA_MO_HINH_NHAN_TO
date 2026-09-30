@@ -9,11 +9,12 @@ def compute_returns(prices_df: pd.DataFrame, risk_free_df: pd.DataFrame = None) 
     df['ret'] = df.groupby('ticker')['adj_close'].pct_change()
     
     # Compute market cap if shares_outstanding is available
-    if 'shares_outstanding' in df.columns:
+    if 'shares_outstanding' in df.columns and ('market_cap' not in df.columns or df['market_cap'].isna().all()):
         df['market_cap'] = df['close'] * df['shares_outstanding']
         
     if risk_free_df is not None:
-        df = pd.merge(df, risk_free_df[['date', 'rf_daily']], on='date', how='left')
+        rf = risk_free_df[['date', 'rf_daily']].drop_duplicates('date')
+        df = pd.merge(df, rf, on='date', how='left', validate='many_to_one')
         df['excess_ret'] = df['ret'] - df['rf_daily']
         
     return df

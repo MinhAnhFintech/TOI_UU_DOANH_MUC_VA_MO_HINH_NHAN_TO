@@ -83,27 +83,30 @@ def compute_benchmark_nav(
     w = np.ones(N) / N  # Start with equal weights
     nav_records = []
 
-    for date in dates:
+    for i, date in enumerate(dates):
         daily_ret = ret_wide.loc[date].fillna(0).values
-
+        if i == 0:
+            daily_ret = np.zeros(N, dtype=float)
+        
         # Portfolio return using current weights
         port_ret = float(np.sum(w * daily_ret))
+        gross_factor = 1 + port_ret
+        post_return_weights = w * (1 + daily_ret)
+        if gross_factor > 0 and np.isfinite(gross_factor):
+            post_return_weights /= gross_factor
+        else:
+            post_return_weights = w.copy()
 
         # Transaction cost at rebalance
         cost = 0.0
-        if date in rebalance_set:
+        if date in rebalance_set and i > 0:
             w_target = np.ones(N) / N
-            cost = compute_transaction_costs(w, w_target, fee_buy, fee_sell)
+            cost = compute_transaction_costs(post_return_weights, w_target, fee_buy, fee_sell)
             w = w_target.copy()
         else:
-            # Let weights drift with returns
-            w_new = w * (1 + daily_ret)
-            w_sum = w_new.sum()
-            if w_sum > 0:
-                w = w_new / w_sum
-            # else: keep current weights (all stocks returned -100%, unlikely)
+            w = post_return_weights
 
-        nav = nav * (1 + port_ret - cost)
+        nav = nav * gross_factor * (1 - cost)
         nav_records.append({'date': date, 'nav': nav})
 
     if nav_records:
@@ -117,4 +120,3 @@ def compute_benchmark_nav(
         'vn30': vn30_nav,
         'equal': equal_nav
     }
-

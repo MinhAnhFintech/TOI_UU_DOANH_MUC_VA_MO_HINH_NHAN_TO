@@ -1,157 +1,133 @@
+"""Build only factors supported by the observations currently stored in the DB.
+
+Unavailable inputs stay missing. In particular, this script never fabricates
+factor returns from random noise or from unrelated factors.
+"""
 import os
 import sys
-import pandas as pd
+
 import numpy as np
-from datetime import date
-from sqlalchemy import create_engine
+import pandas as pd
+from sqlalchemy import create_engine, update
 from sqlalchemy.orm import sessionmaker
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from app.db.models import PriceDaily, IndexDaily, FactorsDaily
-from vnstock.api.financial import Finance
-from app.db.base import Base
+from app.core.config import settings
+from app.db.models import FactorsDaily, PriceDaily
+from app.cleaning.quality import compute_returns
+from app.factors.foreign import build_for
+from app.factors.liq import build_liq
+from app.factors.mkt import build_mkt
+from app.factors.sorts_2x3 import build_rmw_cma, build_smb_hml
+from app.factors.vol import build_vol
+
+
+def _series_frame(series: pd.Series, name: str) -> pd.DataFrame:
+    if series is None or series.empty:
+        return pd.DataFrame(columns=[name], index=pd.DatetimeIndex([], name="date"))
+    result = series.rename(name).to_frame()
+    result.index = pd.to_datetime(result.index)
+    result.index.name = "date"
+    return result
+
 
 def build_factors():
-    print("🚀 Bắt đầu xây dựng nhân tố Fama-French TỪ DỮ LIỆU THẬT...")
-    from app.core.config import settings
     db_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
     engine = create_engine(db_url)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = SessionLocal()
+    try:
+        prices = pd.read_sql(
+            "SELECT date, ticker, close, adj_close, volume, value, shares_outstanding, market_cap "
+            "FROM price_daily ORDER BY ticker, date", engine
+        )
+        indices = pd.read_sql(
+            "SELECT date, index_code, close FROM index_daily WHERE index_code='VN30' ORDER BY date",
+            engine,
+        )
+        rf = pd.read_sql("SELECT date, rf_daily FROM risk_free ORDER BY date", engine)
+        fundamentals = pd.read_sql("SELECT * FROM fundamentals_quarterly", engine)
+        foreign = pd.read_sql("SELECT * FROM foreign_daily", engine)
+        if prices.empty or indices.empty:
+            raise ValueError("Price and VN30 index history are required to build factors")
+        if rf.empty:
+            raise ValueError("Risk-free observations are missing; refusing to assume a rate")
 
-    # Xoá factor cũ
-    session.query(FactorsDaily).delete()
-    session.commit()
+        for column in ("close", "adj_close", "volume", "value", "shares_outstanding", "market_cap"):
+            if column in prices:
+                prices[column] = pd.to_numeric(prices[column], errors="coerce")
+        for frame in (fundamentals, foreign):
+            for column in frame.select_dtypes(include="object").columns:
+                if column not in {"ticker", "report_date", "date"}:
+                    frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        indices["close"] = pd.to_numeric(indices["close"], errors="coerce")
+        rf["rf_daily"] = pd.to_numeric(rf["rf_daily"], errors="coerce")
 
-    print("1. Đọc dữ liệu Giá và Index thật từ CSDL...")
-    df_prices = pd.read_sql("SELECT date, ticker, close, volume FROM price_daily", engine)
-    df_index = pd.read_sql("SELECT date, close FROM index_daily WHERE index_code='VN30'", engine)
+        prices["date"] = pd.to_datetime(prices["date"])
+        indices["date"] = pd.to_datetime(indices["date"])
+        rf["date"] = pd.to_datetime(rf["date"])
+        prices["adj_close"] = prices["adj_close"].fillna(prices["close"])
+        prices = compute_returns(prices, rf)
 
-    if df_prices.empty or df_index.empty:
-        print("❌ Chưa có dữ liệu Giá hoặc Index. Vui lòng chạy collect_real_data.py trước!")
-        return
+        index_input = indices.rename(columns={"index_code": "ticker"})
+        index_input["ticker"] = "VN30"
+        factors = _series_frame(build_mkt(index_input, rf), "mkt")
 
-    df_prices['date'] = pd.to_datetime(df_prices['date'])
-    df_index['date'] = pd.to_datetime(df_index['date'])
-    
-    # Sort
-    df_prices = df_prices.sort_values(by=['ticker', 'date'])
-    df_index = df_index.sort_values(by=['date'])
+        if not fundamentals.empty:
+            for frame in (
+                build_smb_hml(prices, fundamentals),
+                build_rmw_cma(prices, fundamentals),
+            ):
+                if not frame.empty:
+                    frame.index = pd.to_datetime(frame.index)
+                    factors = factors.join(frame, how="outer")
 
-    print("2. Tính toán Lợi suất (Returns)...")
-    # Tinh loi suat VN30
-    df_index['mkt_ret'] = df_index['close'].pct_change()
-    
-    # Tinh loi suat tung co phieu
-    df_prices['ret'] = df_prices.groupby('ticker')['close'].pct_change()
-    
-    # rf = 4% / nam
-    rf_daily = (1 + 0.04)**(1/252) - 1
+        if {"value", "market_cap"}.issubset(prices.columns):
+            factors = factors.join(_series_frame(build_liq(prices), "liq"), how="outer")
+        if not foreign.empty:
+            factors = factors.join(_series_frame(build_for(prices, foreign), "for_"), how="outer")
+        factors = factors.join(_series_frame(build_vol(prices), "vol"), how="outer")
+        factors = factors.sort_index()
+        if factors.empty or "mkt" not in factors or factors["mkt"].notna().sum() < 30:
+            raise ValueError("Fewer than 30 valid market-factor observations were produced")
 
-    print("3. Cào dữ liệu Cơ bản (Vốn chủ sở hữu) để tính SMB, HML...")
-    print("⏳ Lưu ý: Nghỉ 3.5s mỗi mã để tránh Rate Limit...")
-    tickers = df_prices['ticker'].unique()
-    book_equities = {}
-    
-    for ticker in tickers:
-        try:
-            fin = Finance(symbol=ticker, source='KBS')
-            bs = fin.balance_sheet(period='yearly')
-            row = bs[bs['item'].str.contains("Vốn chủ sở hữu", case=False, na=False)]
-            if not row.empty:
-                val = row.iloc[-1, 2] 
-                book_equities[ticker] = float(val) if pd.notna(val) else 1e12
-            else:
-                book_equities[ticker] = 1e12
-        except Exception as e:
-            book_equities[ticker] = 1e12
-        import time
-        time.sleep(3.5)
+        # Prepare all rows before replacing stored factors, so an input error
+        # never erases the last successfully built factor set.
+        records = []
+        for day, row in factors.iterrows():
+            values = {}
+            for name in ("mkt", "smb", "hml", "rmw", "cma", "liq", "for_", "vol"):
+                value = row.get(name)
+                values[name] = float(value) if pd.notna(value) and np.isfinite(value) else None
+            records.append(FactorsDaily(
+                date=pd.Timestamp(day).date(),
+                mkt=values["mkt"], smb=values["smb"], hml=values["hml"],
+                rmw=values["rmw"], cma=values["cma"], liq=values["liq"],
+                for_factor=values["for_"], vol=values["vol"],
+            ))
 
-    print("4. Xây dựng nhân tố MKT, SMB, HML, VOL, LIQ...")
-    
-    # Pivot returns and prices
-    ret_wide = df_prices.pivot(index='date', columns='ticker', values='ret').fillna(0)
-    close_wide = df_prices.pivot(index='date', columns='ticker', values='close').ffill()
-    vol_wide = df_prices.pivot(index='date', columns='ticker', values='volume').fillna(0)
+        return_updates = []
+        for row in prices[["date", "ticker", "ret", "excess_ret"]].itertuples(index=False):
+            ret = float(row.ret) if pd.notna(row.ret) and np.isfinite(row.ret) else None
+            excess = float(row.excess_ret) if pd.notna(row.excess_ret) and np.isfinite(row.excess_ret) else None
+            return_updates.append({"date": pd.Timestamp(row.date).date(), "ticker": row.ticker,
+                                  "ret": ret, "excess_ret": excess})
 
-    # Size (Market Cap = Price * constant_shares) -> for simplicity we sort by Price * 1B
-    size_wide = close_wide * 1e9
-    
-    # B/M = Book Equity / Size
-    factors = []
-    
-    # MKT
-    df_mkt = df_index[['date', 'mkt_ret']].dropna()
-    df_mkt = df_mkt.set_index('date')
-    
-    for dt in df_mkt.index:
-        if dt not in ret_wide.index:
-            continue
-            
-        mkt = df_mkt.loc[dt, 'mkt_ret'] - rf_daily
-        
-        # Cross-sectional data on day dt
-        day_rets = ret_wide.loc[dt]
-        day_size = size_wide.loc[dt]
-        
-        # Drop nan
-        valid = day_rets.notna() & day_size.notna()
-        if not valid.any():
-            continue
-            
-        r = day_rets[valid]
-        sz = day_size[valid]
-        
-        # B/M
-        bm = pd.Series({t: book_equities.get(t, 1e12) / sz[t] for t in sz.index})
-        
-        # SMB (Size median split)
-        median_sz = sz.median()
-        small = r[sz <= median_sz]
-        big = r[sz > median_sz]
-        smb = (small.mean() if not small.empty else 0) - (big.mean() if not big.empty else 0)
-        
-        # HML (B/M 30-70 split)
-        bm_30 = bm.quantile(0.3)
-        bm_70 = bm.quantile(0.7)
-        high_bm = r[bm >= bm_70]
-        low_bm = r[bm <= bm_30]
-        hml = (high_bm.mean() if not high_bm.empty else 0) - (low_bm.mean() if not low_bm.empty else 0)
-        
-        # RMW, CMA (Dummy/Proxy vì phức tạp)
-        rmw = smb * 0.5 + np.random.normal(0, 0.001)
-        cma = hml * 0.5 + np.random.normal(0, 0.001)
-        
-        # LIQ (Volume sort)
-        day_vol = vol_wide.loc[dt, valid]
-        vol_30 = day_vol.quantile(0.3)
-        vol_70 = day_vol.quantile(0.7)
-        liq_high = r[day_vol >= vol_70]
-        liq_low = r[day_vol <= vol_30]
-        liq = (liq_low.mean() if not liq_low.empty else 0) - (liq_high.mean() if not liq_high.empty else 0) # Illiquid - Liquid
-        
-        # VOL (Volatility sort - using proxy cross-sectional abs return)
-        vol = (r.abs().mean()) * np.random.normal(1, 0.2)
-        
-        for_ = mkt * 0.2 + np.random.normal(0, 0.005)
-        
-        factors.append(FactorsDaily(
-            date=dt.date(),
-            mkt=float(mkt) if pd.notna(mkt) else 0.0,
-            smb=float(smb) if pd.notna(smb) else 0.0,
-            hml=float(hml) if pd.notna(hml) else 0.0,
-            rmw=float(rmw) if pd.notna(rmw) else 0.0,
-            cma=float(cma) if pd.notna(cma) else 0.0,
-            liq=float(liq) if pd.notna(liq) else 0.0,
-            for_factor=float(for_) if pd.notna(for_) else 0.0,
-            vol=float(vol) if pd.notna(vol) else 0.0
-        ))
-        
-    print(f" Đã tính toán xong {len(factors)} ngày nhân tố.")
-    session.bulk_save_objects(factors)
-    session.commit()
-    print(" ✅ Đã lưu FactorsDaily vào CSDL.")
+        session.execute(update(PriceDaily), return_updates)
+        session.query(FactorsDaily).delete()
+        session.bulk_save_objects(records)
+        session.commit()
+        available = [name for name in factors.columns if factors[name].notna().any()]
+        print(f"Saved {len(records)} factor dates. Available observed factors: {', '.join(available)}")
+        if len(available) < 5:
+            print("Some requested models will remain unavailable until their source data is collected.")
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+        engine.dispose()
+
 
 if __name__ == "__main__":
     build_factors()

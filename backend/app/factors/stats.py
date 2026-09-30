@@ -101,8 +101,8 @@ def compute_cumulative_returns(
     factors_df: pd.DataFrame,
     base: float = 100.0
 ) -> pd.DataFrame:
-    """Compute cumulative returns for each factor (base=100)."""
-    cumulative = (1 + factors_df).cumprod() * base
+    """Compound stored factor returns from a common base (base=100)."""
+    cumulative = (1 + factors_df.fillna(0)).cumprod() * base
     return cumulative
 
 

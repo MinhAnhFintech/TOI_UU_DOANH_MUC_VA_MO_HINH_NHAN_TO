@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from typing import Optional
 from datetime import date
 
@@ -35,7 +35,21 @@ async def get_prices(
     
     result = await db.execute(query)
     prices = result.scalars().all()
-    data = [{"date": p.date, "ticker": p.ticker, "open": p.open, "high": p.high, "low": p.low, "close": p.close, "adj_close": p.adj_close, "volume": p.volume, "value": p.value} for p in prices]
+    data = []
+    for price in prices:
+        use_adjusted = adjusted and price.adj_close is not None and price.close not in (None, 0)
+        scale = price.adj_close / price.close if use_adjusted else 1
+        data.append({
+            "date": price.date,
+            "ticker": price.ticker,
+            "open": price.open * scale if price.open is not None else None,
+            "high": price.high * scale if price.high is not None else None,
+            "low": price.low * scale if price.low is not None else None,
+            "close": price.adj_close if use_adjusted else price.close,
+            "adj_close": price.adj_close,
+            "volume": price.volume,
+            "value": price.value,
+        })
     return APIResponse(data=data)
 
 @router.get("/index", response_model=APIResponse)
@@ -59,8 +73,6 @@ async def get_index(
 
 @router.get("/quality", response_model=APIResponse)
 async def get_quality(db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import func
-    
     # Get all tickers
     stock_res = await db.execute(select(Stock.ticker))
     tickers = [r[0] for r in stock_res.all()]
@@ -68,32 +80,36 @@ async def get_quality(db: AsyncSession = Depends(get_db)):
     if not tickers:
         return APIResponse(data=[])
     
-    # Get global date range
-    date_range = await db.execute(
-        select(func.min(PriceDaily.date), func.max(PriceDaily.date))
+    # Count actual market dates, then compare each ticker only from its listing date.
+    market_dates_res = await db.execute(
+        select(IndexDaily.date).where(IndexDaily.index_code == 'VN30').distinct()
     )
-    min_date, max_date = date_range.one()
-    if not min_date or not max_date:
+    market_dates = [row[0] for row in market_dates_res.all()]
+    if not market_dates:
+        market_dates_res = await db.execute(select(PriceDaily.date).distinct())
+        market_dates = [row[0] for row in market_dates_res.all()]
+    if not market_dates:
         return APIResponse(data=[])
-    
-    # Count total trading days (from any ticker)
-    total_days_res = await db.execute(
-        select(func.count(func.distinct(PriceDaily.date)))
-    )
-    total_days = total_days_res.scalar() or 1
-    
-    # Count days per ticker
+    first_date, last_date = min(market_dates), max(market_dates)
+
+    # Fetch listing dates without changing the previous ticker response contract.
+    stock_rows = (await db.execute(select(Stock.ticker, Stock.listing_date))).all()
+    listing_dates = {ticker: listing for ticker, listing in stock_rows}
     ticker_counts = await db.execute(
-        select(PriceDaily.ticker, func.count(PriceDaily.date)).group_by(PriceDaily.ticker)
+        select(PriceDaily.ticker, func.count(func.distinct(PriceDaily.date)))
+        .join(Stock, Stock.ticker == PriceDaily.ticker)
+        .where(or_(Stock.listing_date.is_(None), PriceDaily.date >= Stock.listing_date))
+        .group_by(PriceDaily.ticker)
     )
-    count_map = {r[0]: r[1] for r in ticker_counts.all()}
-    
+    count_map = {row[0]: row[1] for row in ticker_counts.all()}
+
     data = []
-    for t in tickers:
-        count = count_map.get(t, 0)
-        missing = max(0, total_days - count)
-        missing_pct = missing / total_days if total_days > 0 else 0
-        data.append({"ticker": t, "missing_pct": round(missing_pct, 4)})
+    for ticker in tickers:
+        listing = listing_dates.get(ticker) or first_date
+        expected_days = sum(listing <= day <= last_date for day in market_dates)
+        observed_days = count_map.get(ticker, 0)
+        missing_pct = max(0, expected_days - observed_days) / expected_days if expected_days else 0
+        data.append({"ticker": ticker, "missing_pct": round(missing_pct, 4)})
     
     data.sort(key=lambda x: x['missing_pct'], reverse=True)
     return APIResponse(data=data)

@@ -5,10 +5,10 @@ import DataTable from '../components/DataTable';
 import { Spinner } from '../components/UI';
 
 export default function ModelsPage() {
-  const { runId } = useGlobalStore();
-  const { data: compareData, isLoading: compareLoading } = useModelComparison(runId || 'default');
-  const { data: grsData, isLoading: grsLoading } = useGRS(runId || 'default');
-  const { data: hypData } = useHypotheses(runId || 'default');
+  const { regressionRunId } = useGlobalStore();
+  const { data: compareData, isLoading: compareLoading } = useModelComparison(regressionRunId || '');
+  const { data: grsData, isLoading: grsLoading } = useGRS(regressionRunId || '');
+  const { data: hypData } = useHypotheses(regressionRunId || '');
 
   const compColumns = useMemo(() => [
     { header: 'Mô hình', accessorKey: 'model' },
@@ -24,6 +24,7 @@ export default function ModelsPage() {
   ], []);
 
   const hypColumns = useMemo(() => [
+    { header: 'Mã giả thuyết', accessorKey: 'id' },
     { header: 'Giả thuyết', accessorKey: 'statement' },
     { header: 'Thống kê', accessorKey: 'statistic', cell: (info: any) => info.getValue()?.toFixed(4) ?? 'N/A' },
     { header: 'p-value', accessorKey: 'p_value', cell: (info: any) => info.getValue()?.toFixed(4) ?? 'N/A' },

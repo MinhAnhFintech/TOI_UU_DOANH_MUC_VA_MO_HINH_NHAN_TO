@@ -4,8 +4,9 @@ from datetime import date
 
 class StockInfo(BaseModel):
     ticker: str
-    company_name: str
-    sector: str
+    company_name: Optional[str] = None
+    sector: Optional[str] = None
+    listing_date: Optional[date] = None
 
 class PriceRecord(BaseModel):
     date: date

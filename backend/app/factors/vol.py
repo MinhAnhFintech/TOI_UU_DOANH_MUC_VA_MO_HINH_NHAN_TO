@@ -26,6 +26,8 @@ def build_vol(
     Returns:
         Series indexed by date with VOL factor values
     """
+    if window < 1 or not 0 < pct_threshold < 0.5:
+        raise ValueError("window must be positive and pct_threshold must be between 0 and 0.5")
     prices = prices.copy()
     prices['date'] = pd.to_datetime(prices['date'])
     prices = prices.sort_values(['ticker', 'date'])
@@ -50,6 +52,9 @@ def build_vol(
     vol_wide = prices.pivot_table(index='date', columns='ticker', values='vol_score')
     cap_wide = prices.pivot_table(index='date', columns='ticker', values='market_cap')
     
+    vol_wide = vol_wide.shift(1)
+    cap_wide_lagged = cap_wide.shift(1)
+    
     results = []
     for date in ret_wide.index:
         vol_day = vol_wide.loc[date].dropna() if date in vol_wide.index else pd.Series(dtype=float)
@@ -58,6 +63,8 @@ def build_vol(
         
         top_pct = vol_day.quantile(1 - pct_threshold)
         bot_pct = vol_day.quantile(pct_threshold)
+        if not np.isfinite(top_pct) or not np.isfinite(bot_pct) or top_pct <= bot_pct:
+            continue
         
         high_vol = vol_day[vol_day >= top_pct].index.tolist()
         low_vol = vol_day[vol_day <= bot_pct].index.tolist()
@@ -65,8 +72,8 @@ def build_vol(
         if not high_vol or not low_vol:
             continue
         
-        r_high = _vw_return(ret_wide, cap_wide, high_vol, date)
-        r_low = _vw_return(ret_wide, cap_wide, low_vol, date)
+        r_high = _vw_return(ret_wide, cap_wide_lagged, high_vol, date)
+        r_low = _vw_return(ret_wide, cap_wide_lagged, low_vol, date)
         
         results.append({'date': date, 'vol': r_high - r_low})
     
@@ -78,13 +85,13 @@ def build_vol(
 def _vw_return(ret_wide, cap_wide, tickers, date):
     available = [t for t in tickers if t in ret_wide.columns]
     if not available:
-        return 0.0
+        return np.nan
     rets = ret_wide.loc[date, available].dropna()
     if rets.empty:
-        return 0.0
+        return np.nan
     if date in cap_wide.index:
-        caps = cap_wide.loc[date, rets.index].dropna()
-        if not caps.empty and caps.sum() > 0:
+        caps = cap_wide.loc[date, rets.index]
+        if caps.notna().all() and (caps > 0).all() and caps.sum() > 0:
             w = caps / caps.sum()
             return float((w * rets[w.index]).sum())
-    return float(rets.mean())
+    return np.nan

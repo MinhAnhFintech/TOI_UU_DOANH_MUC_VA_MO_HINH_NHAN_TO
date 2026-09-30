@@ -4,22 +4,22 @@ import { useGlobalStore } from '../hooks/useGlobalStore';
 import { useFrontier, useOptimizePortfolio } from '../api/queries';
 import ChartCard from '../components/ChartCard';
 import ConfigPanel, { ConfigValues } from '../components/ConfigPanel';
-import { Spinner, JobProgress } from '../components/UI';
+import { Spinner, JobProgress, RequestError } from '../components/UI';
 import { useJob } from '../hooks/useJob';
 
 export default function FrontierPage() {
-  const { runId, setRunId } = useGlobalStore();
+  const { portfolioRunId, setPortfolioRunId } = useGlobalStore();
   const [jobId, setJobId] = useState<string | null>(null);
   const { progress, status, error, runId: newRunId, isDone } = useJob(jobId);
-  const { mutate, isPending } = useOptimizePortfolio();
+  const { mutate, isPending, error: submitError } = useOptimizePortfolio();
   
-  const { data, isLoading } = useFrontier(runId || 'default');
+  const { data, isLoading } = useFrontier(portfolioRunId || '');
 
   useEffect(() => {
-    if (isDone && newRunId && newRunId !== runId) {
-      setRunId(newRunId);
+    if (isDone && newRunId && newRunId !== portfolioRunId) {
+      setPortfolioRunId(newRunId);
     }
-  }, [isDone, newRunId, runId, setRunId]);
+  }, [isDone, newRunId, portfolioRunId, setPortfolioRunId]);
 
   const handleRun = (formData: ConfigValues) => {
     mutate({
@@ -88,6 +88,7 @@ export default function FrontierPage() {
     <div className="flex gap-6">
       <div className="flex-1 space-y-6">
         <JobProgress progress={progress} status={status} error={error} />
+        <RequestError error={submitError} />
         
         <ChartCard title="Đường biên Hiệu quả Markowitz">
           {isLoading ? (
@@ -102,7 +103,7 @@ export default function FrontierPage() {
         </ChartCard>
       </div>
       <div className="w-80">
-        <ConfigPanel onSubmit={handleRun} isLoading={isPending || status === 'running'} />
+        <ConfigPanel onSubmit={handleRun} isLoading={isPending || status === 'pending' || status === 'running' || (!!jobId && !isDone && !error)} />
       </div>
     </div>
   );

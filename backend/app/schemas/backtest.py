@@ -1,15 +1,22 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Dict, Any, Optional
 from datetime import date
+from typing import Literal
 
 class BacktestRunRequest(BaseModel):
-    run_id: str
-    mode: str
-    rebalance: str
-    fee_buy: float
-    fee_sell: float
+    run_id: str = Field(min_length=1)
+    mode: Literal['fixed']
+    rebalance: Literal['monthly', 'quarterly']
+    fee_buy: float = Field(ge=0, le=0.1)
+    fee_sell: float = Field(ge=0, le=0.1)
     test_start: date
     test_end: date
+
+    @model_validator(mode='after')
+    def validate_period(self):
+        if self.test_start > self.test_end:
+            raise ValueError('test_start must be on or before test_end')
+        return self
 
 class EquityResponse(BaseModel):
     dates: List[date]
