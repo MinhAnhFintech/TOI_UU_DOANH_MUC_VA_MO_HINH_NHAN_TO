@@ -236,6 +236,23 @@ async def optimize_portfolio(
     background_tasks.add_task(portfolio_task, job_id, request)
     return APIResponse(data={"job_id": job_id})
 
+# Ngành mặc định (phân loại tham khảo) dùng khi bảng stocks chưa có dữ liệu ngành
+SECTOR_FALLBACK = {
+    "ACB": "Ngân hàng", "BID": "Ngân hàng", "CTG": "Ngân hàng", "HDB": "Ngân hàng",
+    "MBB": "Ngân hàng", "SHB": "Ngân hàng", "SSB": "Ngân hàng", "STB": "Ngân hàng",
+    "TCB": "Ngân hàng", "TPB": "Ngân hàng", "VCB": "Ngân hàng", "VIB": "Ngân hàng",
+    "VPB": "Ngân hàng",
+    "SSI": "Chứng khoán",
+    "BVH": "Bảo hiểm",
+    "BCM": "Bất động sản", "VHM": "Bất động sản", "VIC": "Bất động sản", "VRE": "Bất động sản",
+    "FPT": "Công nghệ",
+    "GAS": "Dầu khí & Năng lượng", "PLX": "Dầu khí & Năng lượng", "POW": "Dầu khí & Năng lượng",
+    "GVR": "Cao su & Vật liệu", "HPG": "Thép & Vật liệu",
+    "MSN": "Tiêu dùng", "SAB": "Tiêu dùng", "VNM": "Tiêu dùng",
+    "MWG": "Bán lẻ",
+    "VJC": "Hàng không",
+}
+
 @router.get("/weights", response_model=APIResponse)
 async def get_weights(
     run_id: str,
@@ -252,9 +269,24 @@ async def get_weights(
             "weight": row.weight,
             "mu": row.mu,
             "sigma": row.sigma,
-            "sector": sector or "N/A"
+            "sector": sector or SECTOR_FALLBACK.get(row.ticker, "Khác")
         })
     return APIResponse(data=data)
+
+@router.get("/config", response_model=APIResponse)
+async def get_portfolio_config(
+    run_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Cấu hình đã lưu của một lần tối ưu (mô hình, estimator, w_max, rf, giai đoạn Train)."""
+    run = await db.get(DBPortfolioRun, run_id)
+    if run is None or not run.config_json:
+        return APIResponse(data={})
+    try:
+        config = json.loads(run.config_json)
+    except ValueError:
+        config = {}
+    return APIResponse(data=config)
 
 @router.get("/frontier", response_model=APIResponse)
 async def get_frontier(

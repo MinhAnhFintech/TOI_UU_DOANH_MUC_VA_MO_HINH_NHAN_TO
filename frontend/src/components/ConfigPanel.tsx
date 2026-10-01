@@ -14,6 +14,8 @@ const schema = z.object({
   test_start: z.string(),
   test_end: z.string(),
   frequency: z.enum(['M', 'Q']),
+  data_freq: z.enum(['daily', 'weekly', 'monthly']),
+  cov_type: z.enum(['HAC', 'nonrobust']),
 }).refine((values) => values.train_start <= values.train_end, {
   message: 'Ngày bắt đầu Train phải trước hoặc bằng ngày kết thúc.',
   path: ['train_end'],
@@ -24,7 +26,7 @@ const schema = z.object({
 
 export type ConfigValues = z.infer<typeof schema>;
 
-export default function ConfigPanel({ onSubmit, defaultValues, isLoading, showTestDates = false, disabledReason }: { onSubmit: (data: ConfigValues) => void, defaultValues?: Partial<ConfigValues>, isLoading?: boolean, showTestDates?: boolean, disabledReason?: string }) {
+export default function ConfigPanel({ onSubmit, defaultValues, isLoading, showTestDates = false, disabledReason, regressionMode = false, hideFees = false }: { onSubmit: (data: ConfigValues) => void, defaultValues?: Partial<ConfigValues>, isLoading?: boolean, showTestDates?: boolean, disabledReason?: string, regressionMode?: boolean, hideFees?: boolean }) {
   const { register, handleSubmit, setError, watch, formState: { errors } } = useForm<ConfigValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -38,6 +40,8 @@ export default function ConfigPanel({ onSubmit, defaultValues, isLoading, showTe
       test_start: '2025-01-01',
       test_end: '2025-12-31',
       frequency: 'M',
+      data_freq: 'daily',
+      cov_type: 'HAC',
       ...defaultValues,
     }
   });
@@ -65,6 +69,8 @@ export default function ConfigPanel({ onSubmit, defaultValues, isLoading, showTe
         </select>
       </div>
 
+      {!regressionMode && (
+        <>
       <div>
         <label className="block text-sm font-medium text-slate-700">Ước lượng rủi ro (Estimator)</label>
         <select {...register('estimator')} className="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-navy-500 focus:ring-navy-500 sm:text-sm p-2 border">
@@ -79,6 +85,7 @@ export default function ConfigPanel({ onSubmit, defaultValues, isLoading, showTe
         <input type="range" min="0.04" max="1" step="0.01" {...register('w_max', { valueAsNumber: true })} className="mt-1 block w-full" />
       </div>
 
+          {!hideFees && (
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-slate-700">Phí mua</label>
@@ -91,6 +98,30 @@ export default function ConfigPanel({ onSubmit, defaultValues, isLoading, showTe
           {errors.fee_sell && <p className="mt-1 text-xs text-red-600">Phí bán phải nằm trong khoảng 0–10%.</p>}
         </div>
       </div>
+
+          )}
+        </>
+      )}
+
+      {regressionMode && (
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700">Tần suất dữ liệu</label>
+            <select {...register('data_freq')} className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm p-2 border">
+              <option value="daily">Ngày (Daily)</option>
+              <option value="weekly">Tuần (Weekly)</option>
+              <option value="monthly">Tháng (Monthly)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700">Sai số chuẩn</label>
+            <select {...register('cov_type')} className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm p-2 border">
+              <option value="HAC">HAC (Newey-West)</option>
+              <option value="nonrobust">OLS (Thường)</option>
+            </select>
+          </div>
+        </div>
+      )}
 
       {showTestDates && (
         <div className="space-y-3">

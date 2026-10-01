@@ -3,7 +3,9 @@ import sys
 import pandas as pd
 from datetime import date
 import time
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect as sa_inspect
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -15,17 +17,56 @@ def run():
     print("🚀 Bắt đầu thu thập DỮ LIỆU THẬT từ thị trường...")
     from app.core.config import settings
     db_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
-    engine = create_engine(db_url)
+    # pool_pre_ping: tự kiểm tra và nối lại nếu server đã ngắt kết nối.
+    engine = create_engine(db_url, pool_pre_ping=True, pool_recycle=240)
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = SessionLocal()
 
     print("1. Đang cập nhật dữ liệu; các quan sát hiện có sẽ được giữ lại.")
 
-    def upsert(records):
-        for record in records:
-            session.merge(record)
+    def _clean(value):
+        """Đổi kiểu numpy sang kiểu Python và NaN sang None để lưu vào database."""
+        if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+            try:
+                value = value.item()
+            except Exception:
+                pass
+        if isinstance(value, float) and value != value:
+            return None
+        return value
+
+    def _bulk_upsert(records, chunk_size=500):
+        """Ghi hàng loạt (INSERT ... ON CONFLICT DO UPDATE) thay vì từng dòng một."""
+        records = list(records)
+        if not records:
+            return
+        table = sa_inspect(type(records[0])).local_table
+        columns = [c.name for c in table.columns]
+        pk = [c.name for c in table.primary_key.columns]
+        insert = sqlite_insert if engine.dialect.name == "sqlite" else pg_insert
+        rows = [{c: _clean(getattr(r, c)) for c in columns} for r in records]
+        for i in range(0, len(rows), chunk_size):
+            stmt = insert(table).values(rows[i:i + chunk_size])
+            update_cols = {c: stmt.excluded[c] for c in columns if c not in pk}
+            if update_cols:
+                stmt = stmt.on_conflict_do_update(index_elements=pk, set_=update_cols)
+            else:
+                stmt = stmt.on_conflict_do_nothing(index_elements=pk)
+            session.execute(stmt)
         session.commit()
+
+    def upsert(records):
+        records = list(records)
+        for attempt in (1, 2):
+            try:
+                _bulk_upsert(records)
+                return
+            except Exception:
+                session.rollback()      # bắt buộc: nếu không, mọi lệnh sau sẽ lỗi dây chuyền
+                if attempt == 2:
+                    raise
+                time.sleep(2)           # lần 1 lỗi (vd. mất kết nối): thử lại 1 lần
 
     vn30_tickers = [
         "ACB", "BCM", "BID", "BVH", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG", 
@@ -98,6 +139,7 @@ def run():
                 upsert(prices)
                 print(f" ✅ Tải thành công {ticker}")
         except Exception as e:
+            session.rollback()
             print(f" ❌ Lỗi tải {ticker}: {e}")
             
         # Nghỉ 3.5s để lách luật 20 requests/phút của vnstock
@@ -118,6 +160,7 @@ def run():
             upsert(indices)
             print(" ✅ Tải thành công VN30 Index")
     except Exception as e:
+        session.rollback()
         print(f" ❌ Lỗi tải Index: {e}")
 
     # Use an explicit constant-rate assumption until a historical RF source is configured.
@@ -134,4 +177,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-

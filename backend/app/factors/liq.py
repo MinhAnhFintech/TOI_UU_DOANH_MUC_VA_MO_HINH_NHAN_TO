@@ -65,11 +65,15 @@ def build_liq(
     # For each date, sort stocks into illiquid (top 30%) and liquid (bottom 30%)
     results = []
     ret_wide = prices.pivot_table(index='date', columns='ticker', values='ret')
-    illiq_wide = prices.pivot_table(index='date', columns='ticker', values='illiq')
-    cap_wide = prices.pivot_table(index='date', columns='ticker', values='market_cap')
+    # pivot_table bỏ các ngày chỉ toàn NaN (vd. ~30 ngày đầu chưa đủ cửa sổ Amihud),
+    # nên phải căn lại theo đúng các ngày của ret_wide để .loc[date] không bị KeyError.
+    illiq_wide = prices.pivot_table(index='date', columns='ticker', values='illiq').reindex(ret_wide.index)
+    cap_wide = prices.pivot_table(index='date', columns='ticker', values='market_cap').reindex(ret_wide.index)
     
     illiq_wide = illiq_wide.shift(1)  # Lag signal by 1 day to prevent look-ahead bias
     cap_wide_lagged = cap_wide.shift(1)
+    # Chưa có vốn hoá (thiếu số cổ phiếu lưu hành): dùng trọng số bằng nhau thay vì để trống.
+    equal_weight = not cap_wide.notna().to_numpy().any()
     
     for date in ret_wide.index:
         illiq_day = illiq_wide.loc[date].dropna()
@@ -89,8 +93,8 @@ def build_liq(
             continue
         
         # Value-weighted returns
-        r_illiq = _vw_return(ret_wide, cap_wide_lagged, illiquid_tickers, date)
-        r_liquid = _vw_return(ret_wide, cap_wide_lagged, liquid_tickers, date)
+        r_illiq = _vw_return(ret_wide, cap_wide_lagged, illiquid_tickers, date, equal_weight)
+        r_liquid = _vw_return(ret_wide, cap_wide_lagged, liquid_tickers, date, equal_weight)
         
         results.append({'date': date, 'liq': r_illiq - r_liquid})
     
@@ -100,16 +104,19 @@ def build_liq(
     return pd.DataFrame(results).set_index('date')['liq']
 
 
-def _vw_return(ret_wide, cap_wide, tickers, date):
-    """Value-weighted return for a group of tickers."""
+def _vw_return(ret_wide, cap_wide, tickers, date, equal_weight=False):
+    """Value-weighted return for a group of tickers (equal-weighted nếu equal_weight=True)."""
     available = [t for t in tickers if t in ret_wide.columns]
     if not available:
         return np.nan
     rets = ret_wide.loc[date, available].dropna()
     if rets.empty:
         return np.nan
+    if equal_weight:
+        return float(rets.mean())
     if date in cap_wide.index:
-        caps = cap_wide.loc[date, rets.index]
+        # reindex theo cột: nếu thiếu vốn hóa thì ra NaN (LIQ để trống) thay vì KeyError.
+        caps = cap_wide.reindex(columns=rets.index).loc[date]
         if caps.notna().all() and (caps > 0).all() and caps.sum() > 0:
             w = caps / caps.sum()
             return float((w * rets[w.index]).sum())

@@ -7,6 +7,7 @@ import ChartCard from '../components/ChartCard';
 import ConfigPanel, { ConfigValues } from '../components/ConfigPanel';
 import { Spinner, JobProgress, RequestError } from '../components/UI';
 import { useJob } from '../hooks/useJob';
+import WeightsGuide from '../components/WeightsGuide';
 
 export default function WeightsPage() {
   const { portfolioRunId, setPortfolioRunId } = useGlobalStore();
@@ -61,9 +62,7 @@ export default function WeightsPage() {
       <div className="flex-1 space-y-6">
         <JobProgress progress={progress} status={status} error={error} />
         <RequestError error={submitError} />
-        <div className="p-4 bg-blue-50 text-blue-800 rounded-lg text-sm mb-4 border border-blue-100">
-          <strong>Lưu ý:</strong> Thuật toán Markowitz sẽ tự động loại bỏ các mã cổ phiếu không hiệu quả (gán tỷ trọng 0%). Để ép danh mục phải mua nhiều mã hơn nhằm phân tán rủi ro, hãy giảm <strong>Tỷ trọng tối đa / mã (w_max)</strong> ở bảng cấu hình bên phải rồi chạy lại thuật toán.
-        </div>
+        <WeightsGuide weights={data?.data} />
         <ChartCard title="Tỷ trọng Danh mục Tối ưu">
           {isLoading ? (
             <Spinner />
@@ -81,7 +80,7 @@ export default function WeightsPage() {
         )}
       </div>
       <div className="w-80">
-        <ConfigPanel onSubmit={handleRun} isLoading={isPending || status === 'pending' || status === 'running' || (!!jobId && !isDone && !error)} />
+        <ConfigPanel hideFees onSubmit={handleRun} isLoading={isPending || status === 'pending' || status === 'running' || (!!jobId && !isDone && !error)} />
       </div>
     </div>
   );

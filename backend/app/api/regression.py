@@ -53,6 +53,21 @@ def _compute_grs_for_model(
     return grs_test(coefficients[0], residuals, factor_values)
 
 
+_FREQ_RULES = {'weekly': ('W-FRI', 2), 'monthly': ('ME', 1)}
+
+
+def _compound_to_frequency(frame: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Gộp lợi suất ngày thành tuần/tháng bằng cách nhân dồn (1+r)-1."""
+    frame = frame.copy()
+    frame.index = pd.to_datetime(frame.index)
+    logs = np.log1p(frame.clip(lower=-0.99))
+    try:
+        grouped = logs.resample(rule)
+    except ValueError:  # pandas cũ chưa có 'ME'
+        grouped = logs.resample('M')
+    return np.expm1(grouped.sum(min_count=1))
+
+
 async def _update_job_progress(job_id: str, progress: float) -> None:
     async with AsyncSessionLocal() as progress_session:
         progress_job = await progress_session.get(Job, job_id)
@@ -105,6 +120,15 @@ async def regression_task(job_id: str, request: RegressionRunRequest):
             df_factors.set_index('date', inplace=True)
             df_factors = df_factors.replace([np.inf, -np.inf], np.nan)
             
+            hac_lag = 5
+            if request.freq != 'daily':
+                rule, hac_lag = _FREQ_RULES[request.freq]
+                excess_returns = _compound_to_frequency(excess_returns, rule)
+                numeric_cols = [c for c in df_factors.columns if df_factors[c].dtype.kind in 'fi']
+                df_factors = _compound_to_frequency(df_factors[numeric_cols], rule)
+                excess_returns = excess_returns.dropna(how='all')
+                df_factors = df_factors.dropna(how='all')
+
             run_id = job_id
             model_factors = {name: get_model_factors(name) for name in request.models}
             all_reg_results = {}
@@ -123,7 +147,7 @@ async def regression_task(job_id: str, request: RegressionRunRequest):
                     raise ValueError(f"{model_name} has fewer than 30 complete factor observations in the selected period.")
 
                 results = await asyncio.to_thread(
-                    run_regression, excess_returns, X, model_name, request.cov_type
+                    run_regression, excess_returns, X, model_name, request.cov_type, hac_lag
                 )
                 if not results:
                     raise ValueError(f"{model_name} could not be estimated: no ticker has enough complete observations.")

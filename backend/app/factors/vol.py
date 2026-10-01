@@ -54,6 +54,8 @@ def build_vol(
     
     vol_wide = vol_wide.shift(1)
     cap_wide_lagged = cap_wide.shift(1)
+    # Chưa có vốn hoá (thiếu số cổ phiếu lưu hành): dùng trọng số bằng nhau thay vì để trống.
+    equal_weight = not cap_wide.notna().to_numpy().any()
     
     results = []
     for date in ret_wide.index:
@@ -72,8 +74,8 @@ def build_vol(
         if not high_vol or not low_vol:
             continue
         
-        r_high = _vw_return(ret_wide, cap_wide_lagged, high_vol, date)
-        r_low = _vw_return(ret_wide, cap_wide_lagged, low_vol, date)
+        r_high = _vw_return(ret_wide, cap_wide_lagged, high_vol, date, equal_weight)
+        r_low = _vw_return(ret_wide, cap_wide_lagged, low_vol, date, equal_weight)
         
         results.append({'date': date, 'vol': r_high - r_low})
     
@@ -82,15 +84,17 @@ def build_vol(
     return pd.DataFrame(results).set_index('date')['vol']
 
 
-def _vw_return(ret_wide, cap_wide, tickers, date):
+def _vw_return(ret_wide, cap_wide, tickers, date, equal_weight=False):
     available = [t for t in tickers if t in ret_wide.columns]
     if not available:
         return np.nan
     rets = ret_wide.loc[date, available].dropna()
     if rets.empty:
         return np.nan
+    if equal_weight:
+        return float(rets.mean())
     if date in cap_wide.index:
-        caps = cap_wide.loc[date, rets.index]
+        caps = cap_wide.reindex(columns=rets.index).loc[date]
         if caps.notna().all() and (caps > 0).all() and caps.sum() > 0:
             w = caps / caps.sum()
             return float((w * rets[w.index]).sum())

@@ -8,7 +8,9 @@ import sys
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import create_engine, update
+from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -31,12 +33,31 @@ def _series_frame(series: pd.Series, name: str) -> pd.DataFrame:
     return result
 
 
+def _batched_update_returns(session, engine, rows, chunk_size=1000):
+    """Cập nhật ret / excess_ret theo lô (INSERT ... ON CONFLICT DO UPDATE).
+
+    Cách cũ gửi từng dòng một (hàng chục nghìn lượt qua mạng) nên rất chậm với Supabase.
+    """
+    if not rows:
+        return
+    table = PriceDaily.__table__
+    insert = sqlite_insert if engine.dialect.name == "sqlite" else pg_insert
+    for i in range(0, len(rows), chunk_size):
+        stmt = insert(table).values(rows[i:i + chunk_size])
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["date", "ticker"],
+            set_={"ret": stmt.excluded.ret, "excess_ret": stmt.excluded.excess_ret},
+        )
+        session.execute(stmt)
+
+
 def build_factors():
     db_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
-    engine = create_engine(db_url)
+    engine = create_engine(db_url, pool_pre_ping=True, pool_recycle=240)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = SessionLocal()
     try:
+        print("1. Đọc dữ liệu giá, chỉ số, lãi suất từ database...", flush=True)
         prices = pd.read_sql(
             "SELECT date, ticker, close, adj_close, volume, value, shares_outstanding, market_cap "
             "FROM price_daily ORDER BY ticker, date", engine
@@ -69,14 +90,16 @@ def build_factors():
         prices["adj_close"] = prices["adj_close"].fillna(prices["close"])
         prices = compute_returns(prices, rf)
 
+        print("2. Tính các nhân tố (MKT, SMB/HML, RMW/CMA, LIQ, FOR, VOL)...", flush=True)
         index_input = indices.rename(columns={"index_code": "ticker"})
         index_input["ticker"] = "VN30"
         factors = _series_frame(build_mkt(index_input, rf), "mkt")
 
         if not fundamentals.empty:
+            freq = settings.FACTOR_REBALANCE_MONTHS   # 6 tháng (tháng 6 và tháng 12) theo kế hoạch đề án
             for frame in (
-                build_smb_hml(prices, fundamentals),
-                build_rmw_cma(prices, fundamentals),
+                build_smb_hml(prices, fundamentals, rebalance_freq_months=freq),
+                build_rmw_cma(prices, fundamentals, rebalance_freq_months=freq),
             ):
                 if not frame.empty:
                     frame.index = pd.to_datetime(frame.index)
@@ -88,6 +111,31 @@ def build_factors():
             factors = factors.join(_series_frame(build_for(prices, foreign), "for_"), how="outer")
         factors = factors.join(_series_frame(build_vol(prices), "vol"), how="outer")
         factors = factors.sort_index()
+
+        # Báo cáo nhanh từng nhân tố: có bao nhiêu ngày, và nếu thiếu thì thiếu vì đâu.
+        has_cap = prices["market_cap"].notna().any()
+        notes = {
+            "smb": "cần fundamentals_quarterly + market_cap -> chạy python collect_fundamentals.py",
+            "hml": "cần fundamentals_quarterly + market_cap -> chạy python collect_fundamentals.py",
+            "rmw": "cần ROE trong fundamentals_quarterly -> chạy python collect_fundamentals.py",
+            "cma": "cần total_assets trong fundamentals_quarterly (>= 5 quý liên tiếp)",
+            "liq": "cần giá trị giao dịch (value) trong price_daily",
+            "for_": "cần foreign_daily -> chạy python collect_foreign.py",
+            "vol": "cần lợi suất ngày trong price_daily",
+        }
+        print("   Kết quả từng nhân tố (số ngày có dữ liệu):", flush=True)
+        for name in ("mkt", "smb", "hml", "rmw", "cma", "liq", "for_", "vol"):
+            count = int(factors[name].notna().sum()) if name in factors else 0
+            if count:
+                first = factors[name].first_valid_index().date()
+                last = factors[name].last_valid_index().date()
+                print(f"     ✅ {name:5s}: {count:5d} ngày ({first} → {last})", flush=True)
+            else:
+                print(f"     ❌ {name:5s}: chưa có dữ liệu ({notes.get(name, '')})", flush=True)
+        if not has_cap:
+            print("   ⚠️ price_daily chưa có vốn hoá (market_cap): LIQ/VOL/FOR dùng trọng số bằng nhau; "
+                  "SMB/HML/RMW/CMA cần chạy collect_fundamentals.py.", flush=True)
+
         if factors.empty or "mkt" not in factors or factors["mkt"].notna().sum() < 30:
             raise ValueError("Fewer than 30 valid market-factor observations were produced")
 
@@ -113,7 +161,9 @@ def build_factors():
             return_updates.append({"date": pd.Timestamp(row.date).date(), "ticker": row.ticker,
                                   "ret": ret, "excess_ret": excess})
 
-        session.execute(update(PriceDaily), return_updates)
+        print(f"3. Ghi {len(return_updates):,} dòng lợi suất vào database (theo lô, vài chục giây)...", flush=True)
+        _batched_update_returns(session, engine, return_updates)
+        print("4. Ghi bảng nhân tố...", flush=True)
         session.query(FactorsDaily).delete()
         session.bulk_save_objects(records)
         session.commit()

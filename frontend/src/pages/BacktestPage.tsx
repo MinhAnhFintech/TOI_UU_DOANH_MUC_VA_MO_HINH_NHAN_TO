@@ -8,6 +8,7 @@ import ConfigPanel, { ConfigValues } from '../components/ConfigPanel';
 import { Spinner, JobProgress, RequestError } from '../components/UI';
 import { useJob } from '../hooks/useJob';
 import { formatPercent } from '../lib/utils';
+import BacktestGuide from '../components/BacktestGuide';
 
 export default function BacktestPage() {
   const { portfolioRunId, backtestRunId, setBacktestRunId } = useGlobalStore();
@@ -47,7 +48,7 @@ export default function BacktestPage() {
       tooltip: { trigger: 'axis' },
       legend: { data: ['VN30', 'Equal Weight', 'Đề xuất'] },
       xAxis: { type: 'category', data: d.dates },
-      yAxis: { type: 'value', name: 'NAV' },
+      yAxis: { type: 'value', name: 'NAV', scale: true },
       series: [
         { name: 'VN30', type: 'line', data: d.vn30, showSymbol: false },
         { name: 'Equal Weight', type: 'line', data: d.equal, showSymbol: false },
@@ -88,6 +89,7 @@ export default function BacktestPage() {
       <div className="flex-1 space-y-6">
         <JobProgress progress={progress} status={status} error={error} />
         <RequestError error={submitError} />
+        <BacktestGuide metrics={metricsData?.data} />
         <ChartCard title="Đường cong Vốn (Equity Curve)">
             {equityLoading ? <Spinner /> : equityOption ? (
               <ReactECharts option={equityOption} style={{ height: '400px' }} />

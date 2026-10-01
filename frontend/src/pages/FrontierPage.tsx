@@ -6,6 +6,7 @@ import ChartCard from '../components/ChartCard';
 import ConfigPanel, { ConfigValues } from '../components/ConfigPanel';
 import { Spinner, JobProgress, RequestError } from '../components/UI';
 import { useJob } from '../hooks/useJob';
+import FrontierGuide from '../components/FrontierGuide';
 
 export default function FrontierPage() {
   const { portfolioRunId, setPortfolioRunId } = useGlobalStore();
@@ -89,7 +90,8 @@ export default function FrontierPage() {
       <div className="flex-1 space-y-6">
         <JobProgress progress={progress} status={status} error={error} />
         <RequestError error={submitError} />
-        
+        <FrontierGuide frontier={data?.data?.frontier} tangency={data?.data?.tangency} />
+
         <ChartCard title="Đường biên Hiệu quả Markowitz">
           {isLoading ? (
             <Spinner />
@@ -103,7 +105,7 @@ export default function FrontierPage() {
         </ChartCard>
       </div>
       <div className="w-80">
-        <ConfigPanel onSubmit={handleRun} isLoading={isPending || status === 'pending' || status === 'running' || (!!jobId && !isDone && !error)} />
+        <ConfigPanel hideFees onSubmit={handleRun} isLoading={isPending || status === 'pending' || status === 'running' || (!!jobId && !isDone && !error)} />
       </div>
     </div>
   );

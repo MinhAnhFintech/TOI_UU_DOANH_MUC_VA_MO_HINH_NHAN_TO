@@ -4,13 +4,14 @@ import { useFactorStats, useFactorCumulative } from '../api/queries';
 import DataTable from '../components/DataTable';
 import ChartCard from '../components/ChartCard';
 import { Spinner } from '../components/UI';
+import FactorGuide from '../components/FactorGuide';
 
 export default function FactorsPage() {
   const { data: statsData, isLoading: statsLoading } = useFactorStats();
   const { data: cumData, isLoading: cumLoading } = useFactorCumulative();
 
   const columns = useMemo(() => [
-    { header: 'Nhân tố', accessorKey: 'factor' },
+    { header: 'Nhân tố', accessorKey: 'factor', cell: (info: any) => String(info.getValue() ?? '').replace(/_$/, '').toUpperCase() },
     { header: 'Trung bình', accessorKey: 'mean', cell: (info: any) => info.getValue()?.toFixed(6) ?? 'N/A' },
     { header: 'Độ lệch chuẩn', accessorKey: 'std', cell: (info: any) => info.getValue()?.toFixed(6) ?? 'N/A' },
     { header: 'TB Năm', accessorKey: 'ann_mean', cell: (info: any) => info.getValue() ? `${(info.getValue() * 100).toFixed(2)}%` : 'N/A' },
@@ -25,7 +26,7 @@ export default function FactorsPage() {
     if (!cumData?.data || !Array.isArray(cumData.data) || cumData.data.length === 0) return null;
     const dates = cumData.data.map((d: any) => d.date);
     const series = Object.keys(cumData.data[0]).filter(k => k !== 'date').map(factor => ({
-      name: factor.toUpperCase(),
+      name: factor.replace(/_$/, '').toUpperCase(),
       type: 'line' as const,
       data: cumData.data.map((d: any) => d[factor]),
       showSymbol: false,
@@ -43,6 +44,7 @@ export default function FactorsPage() {
 
   return (
     <div className="space-y-6">
+      <FactorGuide stats={statsData?.data} />
       <ChartCard title="Lợi suất Tích lũy các Nhân tố">
         {cumLoading ? <Spinner /> : chartOption ? (
           <ReactECharts option={chartOption} style={{ height: '400px' }} />

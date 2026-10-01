@@ -8,7 +8,6 @@ import QuantilePage from './pages/QuantilePage';
 import FrontierPage from './pages/FrontierPage';
 import WeightsPage from './pages/WeightsPage';
 import BacktestPage from './pages/BacktestPage';
-import SensitivityPage from './pages/SensitivityPage';
 import ConclusionPage from './pages/ConclusionPage';
 
 export default function App() {
@@ -24,7 +23,6 @@ export default function App() {
         <Route path="frontier" element={<FrontierPage />} />
         <Route path="weights" element={<WeightsPage />} />
         <Route path="backtest" element={<BacktestPage />} />
-        <Route path="sensitivity" element={<SensitivityPage />} />
         <Route path="conclusion" element={<ConclusionPage />} />
       </Route>
     </Routes>

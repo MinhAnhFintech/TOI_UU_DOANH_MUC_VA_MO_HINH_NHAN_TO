@@ -29,6 +29,7 @@ export const useQuantileResults = (model: string, ticker: string) => useQuery({ 
 
 // Portfolio
 export const usePortfolioWeights = (runId: string) => useQuery({ queryKey: ['portfolio', 'weights', runId], queryFn: () => apiClient.get<any, T.APIResponse<T.PortfolioWeight[]>>('/portfolio/weights', { params: { run_id: runId } }), enabled: !!runId });
+export const usePortfolioConfig = (runId: string) => useQuery({ queryKey: ['portfolio', 'config', runId], queryFn: () => apiClient.get<any, T.APIResponse<Record<string, any>>>('/portfolio/config', { params: { run_id: runId } }), enabled: !!runId });
 export const useFrontier = (runId: string) => useQuery({ queryKey: ['portfolio', 'frontier', runId], queryFn: () => apiClient.get<any, T.APIResponse<T.FrontierResponse>>('/portfolio/frontier', { params: { run_id: runId } }), enabled: !!runId });
 export const useOptimizePortfolio = () => useMutation({ mutationFn: (data: T.OptimizeRequest) => apiClient.post<any, T.APIResponse<{ job_id: string }>>('/portfolio/optimize', data) });
 

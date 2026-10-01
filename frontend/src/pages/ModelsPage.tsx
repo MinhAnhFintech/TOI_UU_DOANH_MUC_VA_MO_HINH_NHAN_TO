@@ -3,6 +3,7 @@ import { useGlobalStore } from '../hooks/useGlobalStore';
 import { useModelComparison, useGRS, useHypotheses } from '../api/queries';
 import DataTable from '../components/DataTable';
 import { Spinner } from '../components/UI';
+import ModelsGuide from '../components/ModelsGuide';
 
 export default function ModelsPage() {
   const { regressionRunId } = useGlobalStore();
@@ -40,14 +41,18 @@ export default function ModelsPage() {
 
   if (!hasCompare && !hasGRS) {
     return (
-      <div className="text-center p-8 text-slate-500">
-        Chưa có kết quả so sánh mô hình. Vui lòng chạy Hồi Quy trước.
+      <div className="space-y-6">
+        <ModelsGuide />
+        <div className="text-center p-8 text-slate-500">
+          Chưa có kết quả so sánh mô hình. Vui lòng chạy Hồi Quy trước.
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      <ModelsGuide compare={compareData?.data} grs={grsData?.data} hyp={hypData?.data} />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <DataTable columns={compColumns} data={compareData?.data || []} title="So sánh Mô hình (Sức giải thích)" />
         <DataTable columns={grsColumns} data={grsData?.data || []} title="Kết quả Kiểm định GRS" />
