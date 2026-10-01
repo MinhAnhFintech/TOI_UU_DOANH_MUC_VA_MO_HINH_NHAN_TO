@@ -8,7 +8,7 @@ class RegressionRunRequest(BaseModel):
 
     models: List[str]
     tickers: Optional[List[str]] = None
-    freq: Literal['daily'] = 'daily'
+    freq: Literal['daily', 'weekly', 'monthly'] = 'daily'
     cov_type: Literal['HAC', 'HC0', 'HC1', 'HC2', 'HC3', 'nonrobust'] = 'HAC'
     start: date
     end: date

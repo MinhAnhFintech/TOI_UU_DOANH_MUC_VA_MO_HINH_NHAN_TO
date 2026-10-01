@@ -6,6 +6,7 @@ import ConfigPanel, { ConfigValues } from '../components/ConfigPanel';
 import { Spinner, JobProgress, RequestError } from '../components/UI';
 import { useJob } from '../hooks/useJob';
 import { MODELS } from '../lib/constants';
+import RegressionGuide from '../components/RegressionGuide';
 
 export default function RegressionPage() {
   const { selectedModel, setSelectedModel, regressionRunId, setRegressionRunId } = useGlobalStore();
@@ -24,8 +25,8 @@ export default function RegressionPage() {
     setSelectedModel(formData.model);
     mutate({
       models: MODELS,
-      freq: 'daily',
-      cov_type: 'HAC',
+      freq: formData.data_freq,
+      cov_type: formData.cov_type,
       start: formData.train_start,
       end: formData.train_end,
     }, {
@@ -45,7 +46,7 @@ export default function RegressionPage() {
           const row = info.getValue();
           if (row.alpha == null) return 'N/A';
           return (
-            <div title={`Alpha: ${row.alpha}\nT-Stat: ${row.alpha_t}\nP-value: ${row.alpha_p}`} className="flex flex-col items-center">
+            <div title={`Alpha: ${row.alpha}\nT-Stat: ${row.alpha_t}\nP-value: ${row.alpha_p}`} className="flex flex-col items-start">
               <span className="font-medium">{row.alpha.toFixed(6)}</span>
               <span className="text-xs text-slate-500">({row.alpha_t?.toFixed(2)})</span>
             </div>
@@ -66,7 +67,7 @@ export default function RegressionPage() {
           const p = row.p_values?.[b];
           if (val == null) return 'N/A';
           return (
-            <div title={`Hệ số: ${val}\nT-Stat: ${t}\nP-value: ${p}`} className="flex flex-col items-center">
+            <div title={`Hệ số: ${val}\nT-Stat: ${t}\nP-value: ${p}`} className="flex flex-col items-start">
               <span className="font-medium">{val.toFixed(4)}</span>
               <span className="text-xs text-slate-500">({t?.toFixed(2)})</span>
             </div>
@@ -79,6 +80,7 @@ export default function RegressionPage() {
   return (
     <div className="flex gap-6">
       <div className="flex-1 space-y-6">
+        <RegressionGuide />
         <JobProgress progress={progress} status={status} error={error} />
         <RequestError error={submitError} />
         
@@ -106,7 +108,7 @@ export default function RegressionPage() {
         )}
       </div>
       <div className="w-80">
-        <ConfigPanel onSubmit={handleRun} isLoading={isPending || status === 'pending' || status === 'running' || (!!jobId && !isDone && !error)} />
+        <ConfigPanel regressionMode onSubmit={handleRun} isLoading={isPending || status === 'pending' || status === 'running' || (!!jobId && !isDone && !error)} />
       </div>
     </div>
   );

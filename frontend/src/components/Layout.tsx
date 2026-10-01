@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Database, LineChart, TrendingUp, Cpu, PieChart, Activity, Target, Sliders, Briefcase, FileText } from 'lucide-react';
+import { Database, LineChart, TrendingUp, Cpu, PieChart, Activity, Target, Briefcase, FileText } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useGlobalStore } from '../hooks/useGlobalStore';
 import { MODELS } from '../lib/constants';
@@ -13,7 +13,6 @@ const navItems = [
   { to: '/frontier', icon: Target, label: 'Đường biên Hiệu quả' },
   { to: '/weights', icon: PieChart, label: 'Tỷ trọng Danh mục' },
   { to: '/backtest', icon: Briefcase, label: 'Kiểm định (Backtest)' },
-  { to: '/sensitivity', icon: Sliders, label: 'Phân tích Độ nhạy' },
   { to: '/conclusion', icon: FileText, label: 'Kết luận' },
 ];
 

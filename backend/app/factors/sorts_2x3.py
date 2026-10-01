@@ -3,6 +3,17 @@ import numpy as np
 from typing import Optional
 
 
+def _mean_available(*values: float) -> float:
+    """Trung bình các danh mục có dữ liệu; NaN nếu không có danh mục nào.
+
+    Với chỉ 30 mã, đôi khi một ô trong bảng 2x3 rỗng (vd. không có mã Big & Low B/M). Thay vì
+    bỏ cả kỳ, ta lấy trung bình các danh mục còn lại của mỗi phía.
+    """
+    arr = np.array(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    return float(arr.mean()) if arr.size else np.nan
+
+
 def _get_rebalance_dates(trading_dates: pd.DatetimeIndex, frequency_months: int) -> list[pd.Timestamp]:
     if frequency_months < 1 or frequency_months > 12:
         raise ValueError('rebalance_freq_months must be between 1 and 12.')
@@ -210,17 +221,13 @@ def build_smb_hml(
                     ret_wide, cap_wide_lagged, tickers, date, value_weighted
                 )
 
-            if not np.isfinite(list(port_rets.values())).all():
-                results.append({'date': date, 'smb': np.nan, 'hml': np.nan})
-                continue
-            
-            # SMB = 1/3(SL + SM + SH) - 1/3(BL + BM + BH)
-            smb = (1/3) * (port_rets['SL'] + port_rets['SM'] + port_rets['SH']) \
-                - (1/3) * (port_rets['BL'] + port_rets['BM'] + port_rets['BH'])
+            # SMB = 1/3(SL + SM + SH) - 1/3(BL + BM + BH)   (trung bình các danh mục có dữ liệu)
+            smb = _mean_available(port_rets['SL'], port_rets['SM'], port_rets['SH']) \
+                - _mean_available(port_rets['BL'], port_rets['BM'], port_rets['BH'])
             
             # HML = 1/2(SH + BH) - 1/2(SL + BL)
-            hml = 0.5 * (port_rets['SH'] + port_rets['BH']) \
-                - 0.5 * (port_rets['SL'] + port_rets['BL'])
+            hml = _mean_available(port_rets['SH'], port_rets['BH']) \
+                - _mean_available(port_rets['SL'], port_rets['BL'])
             
             results.append({'date': date, 'smb': smb, 'hml': hml})
     
@@ -343,13 +350,13 @@ def build_rmw_cma(
             rmw_r = {}
             for pn, tickers in rmw_ports.items():
                 rmw_r[pn] = _compute_portfolio_return(ret_wide, cap_wide_lagged, tickers, date, value_weighted)
-            rmw = 0.5 * (rmw_r['SR'] + rmw_r['BR']) - 0.5 * (rmw_r['SW'] + rmw_r['BW'])
+            rmw = _mean_available(rmw_r['SR'], rmw_r['BR']) - _mean_available(rmw_r['SW'], rmw_r['BW'])
             
             # CMA = 1/2(SC + BC) - 1/2(SA + BA)
             cma_r = {}
             for pn, tickers in cma_ports.items():
                 cma_r[pn] = _compute_portfolio_return(ret_wide, cap_wide_lagged, tickers, date, value_weighted)
-            cma = 0.5 * (cma_r['SC'] + cma_r['BC']) - 0.5 * (cma_r['SA'] + cma_r['BA'])
+            cma = _mean_available(cma_r['SC'], cma_r['BC']) - _mean_available(cma_r['SA'], cma_r['BA'])
             
             results.append({'date': date, 'rmw': rmw, 'cma': cma})
     

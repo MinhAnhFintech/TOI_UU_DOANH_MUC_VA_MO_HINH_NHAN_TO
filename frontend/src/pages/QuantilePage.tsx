@@ -4,6 +4,9 @@ import { useGlobalStore } from '../hooks/useGlobalStore';
 import { useQuantileResults, useStocks } from '../api/queries';
 import ChartCard from '../components/ChartCard';
 import { Spinner } from '../components/UI';
+import QuantileGuide from '../components/QuantileGuide';
+
+const label = (k: string) => (k.toLowerCase() === 'const' ? 'CONST (hằng số)' : k.replace(/_$/, '').toUpperCase());
 
 export default function QuantilePage() {
   const { selectedModel } = useGlobalStore();
@@ -26,15 +29,16 @@ export default function QuantilePage() {
     const keys = Object.keys(data.data[0].coefficients);
     if (keys.length === 0) return null;
     
-    const plotFactor = factor || keys[0];
+    const defaultKey = keys.find((k) => k.toLowerCase() !== 'const') ?? keys[0];
+    const plotFactor = keys.includes(factor) ? factor : defaultKey;
     const coefs = data.data.map((d: any) => d.coefficients[plotFactor]);
-    const lower = data.data.map((d: any) => d.lower_ci?.[plotFactor] || 0);
-    const upper = data.data.map((d: any) => d.upper_ci?.[plotFactor] || 0);
+    const lower = data.data.map((d: any) => d.lower_ci?.[plotFactor] ?? null);
+    const upper = data.data.map((d: any) => d.upper_ci?.[plotFactor] ?? null);
 
     return {
       tooltip: { trigger: 'axis' },
       xAxis: { type: 'category', data: taus, name: 'Phân vị (tau)' },
-      yAxis: { type: 'value', name: `Hệ số (${plotFactor.toUpperCase()})` },
+      yAxis: { type: 'value', name: `Hệ số (${label(plotFactor)})` },
       series: [
         { name: 'Hệ số', type: 'line', data: coefs, lineStyle: { color: '#1F2A4A', width: 2 } },
         { name: 'Biên dưới (CI)', type: 'line', data: lower, lineStyle: { type: 'dashed', color: '#ef4444' }, showSymbol: false },
@@ -45,6 +49,7 @@ export default function QuantilePage() {
 
   return (
     <div className="space-y-6">
+      <QuantileGuide model={selectedModel} />
       <div className="bg-white p-4 rounded-lg shadow-sm flex items-center space-x-4 mb-4">
         <label className="text-sm font-medium text-slate-700">Chọn mã cổ phiếu:</label>
         <select
@@ -59,12 +64,15 @@ export default function QuantilePage() {
         
         <label className="text-sm font-medium text-slate-700 ml-4">Nhân tố:</label>
         <select
-          value={factor || (data?.data?.[0]?.coefficients ? Object.keys(data.data[0].coefficients)[0] : '')}
+          value={(() => {
+            const ks = data?.data?.[0]?.coefficients ? Object.keys(data.data[0].coefficients) : [];
+            return ks.includes(factor) ? factor : (ks.find((k) => k.toLowerCase() !== 'const') ?? ks[0] ?? '');
+          })()}
           onChange={(e) => setFactor(e.target.value)}
           className="border rounded px-3 py-1 text-sm"
         >
           {data?.data?.[0]?.coefficients && Object.keys(data.data[0].coefficients).map(k => (
-            <option key={k} value={k}>{k.toUpperCase()}</option>
+            <option key={k} value={k}>{label(k)}</option>
           ))}
         </select>
       </div>
